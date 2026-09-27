@@ -45,7 +45,7 @@ def get_today_hebrew_date_string():
 
 def extract_token(params):
     """
-    חילוץ אוטומטי של הטוקן
+    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת או משתנה הסביבה
     """
     token = os.environ.get("YEMOT_TOKEN", "083136585:456987").strip()
     if token:
@@ -58,7 +58,7 @@ def extract_token(params):
 
 def extract_dtmf(params):
     """
-    חילוץ נקי של המקש שהוקש בלבד
+    חילוץ נקי של המקש שהוקש בלבד מכל השדות האפשריים
     """
     if params.get("ApiDTMF") is not None and str(params.get("ApiDTMF")).strip() != "":
         return str(params.get("ApiDTMF")).strip()
@@ -89,7 +89,7 @@ def send_yemot_response(body_text):
 
 def scan_today_trivia_structure(trivia_folder, token):
     """
-    סריקת מבנה הטריוויה היומי לפי התאריך העברי 8 ספרות
+    סריקת מבנה הטריוויה היומי
     """
     calculated_today_str = get_today_hebrew_date_string()
     
@@ -141,7 +141,6 @@ def scan_today_trivia_structure(trivia_folder, token):
         trivia_data["date_folder"] = date_folder_to_use
         trivia_data["date_folder_path"] = date_folder_path
 
-        # סריקת תיקיות השאלות הממוספרות
         url_date = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + date_folder_path)}"
         res_date = requests.get(url_date, timeout=2.5).json()
 
@@ -155,7 +154,6 @@ def scan_today_trivia_structure(trivia_folder, token):
 
         question_folders.sort()
 
-        # סריקת הקבצים בתוך כל תיקיית שאלה
         for idx, q_folder_name in enumerate(question_folders, start=1):
             q_full_path = f"{date_folder_path}/{q_folder_name}"
             url_q = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + q_full_path)}"
@@ -210,7 +208,7 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
     if dtmf == '*':
         return "id_list_message=t-תודה ושלום.&hangup=yes"
 
-    # עיבוד הבחירה על פי הקשה אמיתית (1:1)
+    # אם המשתמש הקיש מקש לבחירת שאלה
     if dtmf != '':
         try:
             selected_idx = int(dtmf)
@@ -219,7 +217,7 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
         except ValueError:
             pass
 
-    # הקראת מספר השאלות והמקשים בפורמט n-X
+    # הקראת מספר השאלות להיום בפורמט n-X
     prompt_list = [
         "t-נמצאו",
         f"n-{total_questions}",
@@ -242,8 +240,15 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
 
 def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
     questions = trivia_data.get("questions", [])
-    question = questions[q_idx - 1] if 0 < q_idx <= len(questions) else questions[0]
-    existing_files = question.get("files", {})
+    
+    # איתור מוגן של השאלה שנבחרה
+    target_question = None
+    if 0 < q_idx <= len(questions):
+        target_question = questions[q_idx - 1]
+    else:
+        target_question = questions[0] if questions else None
+
+    existing_files = target_question.get("files", {}) if target_question else {"Q": f"{trivia_folder}/000/Q.wav"}
 
     prompt_list = [
         "t-שאלה מספר",
@@ -252,7 +257,6 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
 
     valid_digits_list = ["*"]
 
-    # הקראת התפריט של השאלה שנבחרה
     for digit, letter in ITEM_KEYS.items():
         if letter in existing_files:
             prompt_list.append(f"t-{ITEM_LABELS[letter]}")
@@ -266,10 +270,11 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
 
 def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
     questions = trivia_data.get("questions", [])
-    question = questions[q_idx - 1] if 0 < q_idx <= len(questions) else None
+    
+    if q_idx <= 0 or q_idx > len(questions):
+        q_idx = 1
 
-    if not question:
-        return handle_select_question('', trivia_data, trivia_folder)
+    question = questions[q_idx - 1] if 0 < q_idx <= len(questions) else questions[0]
 
     if dtmf == '*':
         return handle_select_question('', trivia_data, trivia_folder)
@@ -346,10 +351,10 @@ def trivia_endpoint():
 
         step = params.get('step', 'init')
         
-        # חילוץ מוגן של מספר השאלה שנבחרה
+        # חילוץ מוגן של מספר השאלה שנבחרה (q_idx)
         try:
             q_idx = int(params.get('q_idx', 0))
-        except ValueError:
+        except (ValueError, TypeError):
             q_idx = 0
 
         letter = params.get('letter', '')
@@ -366,13 +371,28 @@ def trivia_endpoint():
 
         # ניהול השלבים
         if step in ['init', 'select_question']:
-            response_text = handle_select_question(dtmf, trivia_data, trivia_folder)
+            # אם התקבל מקש בשלב ראשוני - מעבר ישיר לבחירת פריט בשאלה!
+            if dtmf != '' and dtmf != '*':
+                try:
+                    selected_idx = int(dtmf)
+                    if 1 <= selected_idx <= len(trivia_data.get("questions", [])):
+                        response_text = build_select_item_prompt(selected_idx, trivia_data, trivia_folder)
+                    else:
+                        response_text = handle_select_question(dtmf, trivia_data, trivia_folder)
+                except ValueError:
+                    response_text = handle_select_question(dtmf, trivia_data, trivia_folder)
+            else:
+                response_text = handle_select_question(dtmf, trivia_data, trivia_folder)
+
         elif step == 'select_item':
             response_text = handle_select_item(dtmf, q_idx, trivia_data, trivia_folder)
+
         elif step == 'action_menu':
             response_text = handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder, token)
+
         elif step == 'post_edit_menu':
             response_text = handle_post_edit_menu(dtmf, q_idx, trivia_data, trivia_folder)
+
         else:
             response_text = handle_select_question('', trivia_data, trivia_folder)
 
