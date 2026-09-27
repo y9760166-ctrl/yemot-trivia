@@ -89,7 +89,7 @@ def send_yemot_response(body_text):
 
 def scan_today_trivia_structure(trivia_folder, token):
     """
-    סריקת מבנה הטריוויה היומי לפי התאריך העברי 8 ספרות
+    סריקת מבנה הטריוויה היומי
     """
     calculated_today_str = get_today_hebrew_date_string()
     
@@ -141,7 +141,6 @@ def scan_today_trivia_structure(trivia_folder, token):
         trivia_data["date_folder"] = date_folder_to_use
         trivia_data["date_folder_path"] = date_folder_path
 
-        # סריקת תיקיות השאלות
         url_date = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + date_folder_path)}"
         res_date = requests.get(url_date, timeout=2.5).json()
 
@@ -155,7 +154,6 @@ def scan_today_trivia_structure(trivia_folder, token):
 
         question_folders.sort()
 
-        # סריקת הקבצים בתוך כל תיקיית שאלה
         for idx, q_folder_name in enumerate(question_folders, start=1):
             q_full_path = f"{date_folder_path}/{q_folder_name}"
             url_q = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + q_full_path)}"
@@ -232,7 +230,7 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
 
 def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
     """
-    בניית תפריט עריכת הקבצים בשאלה (שלב 2) - חסין תקלות ואינו חוזר לתפריט הראשון!
+    בניית תפריט עריכת הקבצים בשאלה (שלב 2)
     """
     questions = trivia_data.get("questions", [])
     
@@ -240,18 +238,18 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
     if 0 < q_idx <= len(questions):
         target_question = questions[q_idx - 1]
     
-    # במידה וסריקת ה-API החזירה חסר, בונים נתיב דינמי מוגן מבוסס q_idx
-    if not target_question:
-        q_folder_name = f"{(q_idx - 1):03d}" if q_idx > 0 else "000"
-        date_folder = trivia_data.get("date_folder", get_today_hebrew_date_string())
-        q_full_path = f"{trivia_folder}/{date_folder}/{q_folder_name}"
+    date_folder = trivia_data.get("date_folder", get_today_hebrew_date_string())
+    q_folder_name = f"{(q_idx - 1):03d}" if q_idx > 0 else "000"
+    q_full_path = f"{trivia_folder}/{date_folder}/{q_folder_name}"
+
+    if target_question and target_question.get("files"):
+        existing_files = target_question.get("files")
+    else:
         existing_files = {
             "Q": f"{q_full_path}/Q.wav",
             "A": f"{q_full_path}/A.wav",
             "B": f"{q_full_path}/B.wav"
         }
-    else:
-        existing_files = target_question.get("files", {})
 
     prompt_list = [
         "t-שאלה מספר",
@@ -260,13 +258,12 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
 
     valid_digits_list = ["*"]
 
-    # הקראת האפשרויות הזמינות לעריכה
+    # הקראת האפשרויות הזמינות
     for digit, letter in ITEM_KEYS.items():
         if letter in existing_files:
             prompt_list.append(f"t-{ITEM_LABELS[letter]}")
             valid_digits_list.append(digit)
 
-    # מקרה חרום - אם לא נמצאו קבצים מוגדרים
     if len(valid_digits_list) == 1:
         prompt_list.append("t-לעריכת השאלה הקישו 0. לעריכת התשובה הנכונה הקישו 1")
         valid_digits_list.extend(["0", "1"])
@@ -279,7 +276,7 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
 
 def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
     """
-    טיפול בבחירת רכיב לעריכה בשאלה (שלב 2) - לעולם לא חוזר ל-select_question!
+    טיפול בבחירת רכיב לעריכה (שלב 2) - מעבר ישיר מובטח ל-action_menu!
     """
     if dtmf == '*':
         return handle_select_question('', trivia_data, trivia_folder)
@@ -287,29 +284,20 @@ def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
     if q_idx <= 0:
         q_idx = 1
 
+    date_folder = trivia_data.get("date_folder", get_today_hebrew_date_string())
+    q_folder_name = f"{(q_idx - 1):03d}"
+    
     questions = trivia_data.get("questions", [])
     target_question = questions[q_idx - 1] if 0 < q_idx <= len(questions) else None
 
-    if target_question:
-        existing_files = target_question.get("files", {})
-    else:
-        q_folder_name = f"{(q_idx - 1):03d}"
-        date_folder = trivia_data.get("date_folder", get_today_hebrew_date_string())
-        q_full_path = f"{trivia_folder}/{date_folder}/{q_folder_name}"
-        existing_files = {
-            "Q": f"{q_full_path}/Q.wav",
-            "A": f"{q_full_path}/A.wav",
-            "B": f"{q_full_path}/B.wav"
-        }
-
-    # אם המשתמש בחור רכיב לעריכה (0=Q, 1=A, 2=B...)
+    # אם המשתמש מקיש מקש תואם רכיב (0=Q, 1=A, 2=B...)
     if dtmf in ITEM_KEYS:
         letter = ITEM_KEYS[dtmf]
-        if letter in existing_files:
-            file_path = existing_files[letter]
+        file_path = ""
+        
+        if target_question and target_question.get("files") and letter in target_question["files"]:
+            file_path = target_question["files"][letter]
         else:
-            q_folder_name = f"{(q_idx - 1):03d}"
-            date_folder = trivia_data.get("date_folder", get_today_hebrew_date_string())
             file_path = f"{trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
             
         return build_action_menu_prompt(q_idx, letter, file_path, trivia_folder)
@@ -317,6 +305,9 @@ def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
     return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
 
 def build_action_menu_prompt(q_idx, letter, file_path, trivia_folder):
+    """
+    בניית תפריט M1009 לעריכת הקובץ
+    """
     return response_read("m-1009", "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,*") + \
            f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
 
@@ -378,7 +369,6 @@ def trivia_endpoint():
 
         step = params.get('step', 'init')
         
-        # חילוץ מוגן של מספר השאלה שנבחרה
         try:
             q_idx = int(params.get('q_idx', 0))
         except (ValueError, TypeError):
@@ -408,7 +398,22 @@ def trivia_endpoint():
                 response_text = handle_select_question(dtmf, trivia_data, trivia_folder)
 
         elif step == 'select_item':
-            response_text = handle_select_item(dtmf, q_idx, trivia_data, trivia_folder)
+            # מעבר ישיר אם הוקש מקש תואם
+            if dtmf in ITEM_KEYS:
+                letter = ITEM_KEYS[dtmf]
+                date_folder = trivia_data.get("date_folder", get_today_hebrew_date_string())
+                q_folder_name = f"{(q_idx - 1):03d}" if q_idx > 0 else "000"
+                
+                # חיפוש נתיב מועדף
+                target_q = trivia_data["questions"][q_idx - 1] if 0 < q_idx <= len(trivia_data.get("questions", [])) else None
+                if target_q and letter in target_q.get("files", {}):
+                    target_file_path = target_q["files"][letter]
+                else:
+                    target_file_path = f"{trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
+                    
+                response_text = build_action_menu_prompt(q_idx, letter, target_file_path, trivia_folder)
+            else:
+                response_text = handle_select_item(dtmf, q_idx, trivia_data, trivia_folder)
 
         elif step == 'action_menu':
             response_text = handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder, token)
