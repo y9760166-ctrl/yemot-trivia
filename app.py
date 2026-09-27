@@ -70,7 +70,8 @@ def delete_file_from_yemot(token, file_path):
     if not token:
         return
     try:
-        url = f"https://www.call2all.co.il/ym/api/DeleteFile?token={requests.utils.quote(token)}&what={requests.utils.quote('ivar:/' + file_path)}"
+        clean_path = str(file_path).replace("ivar:/", "").strip('/')
+        url = f"https://www.call2all.co.il/ym/api/DeleteFile?token={requests.utils.quote(token)}&what={requests.utils.quote('ivar:/' + clean_path)}"
         requests.get(url, timeout=2.0)
     except Exception:
         pass
@@ -86,11 +87,9 @@ def build_record_prompt(file_path, q_idx, trivia_folder):
     """
     בניית פקודת הקלטה קולית תקנית שתדרוס פיזית את הקובץ הקיים בשלוחת הטריוויה ב-Yemot
     """
-    clean_path = str(file_path).strip('/')
-    if not clean_path.startswith("ivar:/"):
-        clean_path = "ivar:/" + clean_path
+    clean_path = str(file_path).replace("ivar:/", "").strip('/')
 
-    return f"read=t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית=rec_file,voice,1,10,60,b,no,#&save_file_path={clean_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
+    return f"read=t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית=rec_file,voice,1,10,60,b,no,no&save_file_path={clean_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8", status=200)
@@ -291,7 +290,7 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
 
 def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
     """
-    טיפול בבחירת פריט לעריכה
+    טיפול בבחירת פריט לעריכה -> מעבר ישיר להקלטה ודריסת הקובץ!
     """
     if dtmf == '*':
         return handle_select_question('', trivia_data, trivia_folder)
@@ -312,7 +311,7 @@ def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
         else:
             file_path = f"{trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
             
-        # מעבר ישיר להקלטת הקובץ מחדש ודריסתו!
+        # הפעלה ישירה של מודול ההקלטה והדריסה!
         return build_record_prompt(file_path, q_idx, trivia_folder)
 
     return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
