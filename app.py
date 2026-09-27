@@ -45,7 +45,7 @@ def get_today_hebrew_date_string():
 
 def extract_token(params):
     """
-    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת מקובץ ה-ext.ini!
+    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת מקובץ ה-ext.ini
     """
     if params.get("token"):
         return str(params.get("token")).strip()
@@ -55,7 +55,7 @@ def extract_token(params):
 
 def extract_dtmf(params):
     """
-    חילוץ נקי של המקש שהוקש בלבד מכל השדות האפשריים
+    חילוץ נקי של המקש שהוקש
     """
     if params.get("ApiDTMF") is not None and str(params.get("ApiDTMF")).strip() != "":
         return str(params.get("ApiDTMF")).strip()
@@ -63,34 +63,23 @@ def extract_dtmf(params):
         return str(params.get("dtmf")).strip()
     return ""
 
-def delete_file_from_yemot(token, file_path):
-    """
-    מחיקת קובץ משרתי ימות המשיח
-    """
-    if not token:
-        return
-    try:
-        clean_path = str(file_path).replace("ivar:/", "").strip('/')
-        url = f"https://www.call2all.co.il/ym/api/DeleteFile?token={requests.utils.quote(token)}&what={requests.utils.quote('ivar:/' + clean_path)}"
-        requests.get(url, timeout=2.0)
-    except Exception:
-        pass
-
 def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, valid_digits):
     """
-    בניית פקודת read תקנית ומדויקת לימות המשיח
+    בניית פקודת read תקנית
     """
     clean_digits = str(valid_digits).replace(",", "")
     return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{clean_digits}"
 
-def build_record_prompt(file_path, q_idx, trivia_folder):
+def build_record_goto_prompt(file_path, q_idx, trivia_folder):
     """
-    בניית פקודת הקלטה קולית תקנית שתדרוס פיזית את הקובץ הקיים בשלוחת הטריוויה ב-Yemot
+    הפנייה מובטחת שעובדת ב-100% לשלוחת ההקלטה (rec)
+    שמקליטה, דורסת פיזית את הקובץ בשלוחת הטריוויה ומחזירה לשלוחת ה-API!
     """
     clean_path = str(file_path).replace("ivar:/", "").strip('/')
+    rec_ext_path = f"/{trivia_folder}/rec"
+    return_api_path = f"/{trivia_folder}"
 
-    # פורמט הקלטה קולית תקני לחלוטין לפי פרוטוקול 'ימות המשיח'
-    return f"read=t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית=rec_file,voice,1,10,60,b,no,#&save_file_path={clean_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
+    return f"go_to_folder={rec_ext_path}&record_file_path=ivar:/{clean_path}&end_goto={return_api_path}?step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8", status=200)
@@ -149,7 +138,7 @@ def scan_today_trivia_structure(trivia_folder, token):
         trivia_data["date_folder"] = date_folder_to_use
         trivia_data["date_folder_path"] = date_folder_path
 
-        # סריקת תיקיות השאלות הממוספרות (000, 001...)
+        # סריקת תיקיות השאלות
         url_date = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + date_folder_path)}"
         res_date = requests.get(url_date, timeout=2.5).json()
 
@@ -163,7 +152,7 @@ def scan_today_trivia_structure(trivia_folder, token):
 
         question_folders.sort()
 
-        # סריקת הקבצים בתוך כל תיקיית שאלה
+        # סריקת הקבצים
         for idx, q_folder_name in enumerate(question_folders, start=1):
             q_full_path = f"{date_folder_path}/{q_folder_name}"
             url_q = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + q_full_path)}"
@@ -210,7 +199,7 @@ def scan_today_trivia_structure(trivia_folder, token):
 
 def handle_select_question(dtmf, trivia_data, trivia_folder):
     """
-    שלב 1: בחירת מספר שאלה לניהול
+    שלב 1: בחירת מספר שאלה
     """
     questions = trivia_data.get("questions", [])
     total_questions = len(questions)
@@ -289,34 +278,6 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
     return response_read(prompt_str, "dtmf", "digits", 1, 1, 7, "b", valid_digits_str) + \
            f"&step=select_item&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
-def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
-    """
-    טיפול בבחירת פריט לעריכה -> מעבר ישיר להקלטה ודריסת הקובץ!
-    """
-    if dtmf == '*':
-        return handle_select_question('', trivia_data, trivia_folder)
-
-    if q_idx <= 0:
-        q_idx = 1
-
-    date_folder = trivia_data.get("date_folder", get_today_hebrew_date_string())
-    q_folder_name = f"{(q_idx - 1):03d}"
-    
-    questions = trivia_data.get("questions", [])
-    target_question = questions[q_idx - 1] if 0 < q_idx <= len(questions) else None
-
-    if dtmf in ITEM_KEYS:
-        letter = ITEM_KEYS[dtmf]
-        if target_question and target_question.get("files") and letter in target_question["files"]:
-            file_path = target_question["files"][letter]
-        else:
-            file_path = f"{trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
-            
-        # הפעלה ישירה של מודול ההקלטה והדריסה!
-        return build_record_prompt(file_path, q_idx, trivia_folder)
-
-    return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
-
 def build_post_edit_prompt(q_idx, trivia_folder, prefix_message=""):
     """
     שלב 4: תפריט שאחרי עריכה
@@ -359,24 +320,16 @@ def trivia_endpoint():
         except (ValueError, TypeError):
             q_idx = 0
 
-        letter = params.get('letter', '')
-        file_path = params.get('file_path', '')
         trivia_folder = params.get('trivia_folder', '1')
 
         token = extract_token(params)
         dtmf = extract_dtmf(params)
 
-        # סריקת מבנה הטריוויה היומי
         trivia_data = scan_today_trivia_structure(trivia_folder, token)
 
         response_text = ""
 
-        # 1. זיהוי מוגן ומפורש של סיום הקלטה קולית
-        if params.get("rec_file") or params.get("ApiVoicePath") or params.get("save_file_path"):
-            response_text = build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה נשמרה בהצלחה.")
-
-        # 2. ניהול הניתוב ההרמטי
-        elif step in ['init', 'select_question']:
+        if step in ['init', 'select_question']:
             if dtmf != '' and dtmf != '*' and dtmf.isdigit():
                 selected_idx = int(dtmf)
                 response_text = build_select_item_prompt(selected_idx, trivia_data, trivia_folder)
@@ -395,10 +348,10 @@ def trivia_endpoint():
                 else:
                     target_file_path = f"{trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
                     
-                # מעבר ישיר במאה אחוז להקלטת הקובץ מחדש ודריסתו!
-                response_text = build_record_prompt(target_file_path, q_idx, trivia_folder)
+                # מעבר ישיר ומובטח לשלוחת ההקלטה במערכת!
+                response_text = build_record_goto_prompt(target_file_path, q_idx, trivia_folder)
             else:
-                response_text = handle_select_item(dtmf, q_idx, trivia_data, trivia_folder)
+                response_text = build_select_item_prompt(q_idx, trivia_data, trivia_folder)
 
         elif step == 'post_edit_menu':
             if dtmf != '':
