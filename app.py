@@ -45,11 +45,8 @@ def get_today_hebrew_date_string():
 
 def extract_token(params):
     """
-    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת מ-ext.ini או משתנה הסביבה
+    חילוץ אוטומטי של הטוקן אך ורק מתוך הבקשה הנכנסת מקובץ ה-ext.ini!
     """
-    token = os.environ.get("YEMOT_TOKEN", "").strip()
-    if token:
-        return token
     if params.get("token"):
         return str(params.get("token")).strip()
     if params.get("ApiToken"):
@@ -82,7 +79,9 @@ def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, 
     """
     בניית פקודת read תקנית ומדויקת לימות המשיח
     """
-    return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{valid_digits}"
+    # ניקוי פסיקים מ-valid_digits לתאימות מלאה מול מנוע ה-IVR
+    clean_digits = str(valid_digits).replace(",", "")
+    return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{clean_digits}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8", status=200)
@@ -228,7 +227,7 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
         valid_digits_list.append(str(i))
 
     prompt_str = ".".join(prompt_list)
-    valid_digits_str = ",".join(valid_digits_list)
+    valid_digits_str = "".join(valid_digits_list)
 
     return response_read(prompt_str, "dtmf", "digits", 1, 1, 7, "b", valid_digits_str) + \
            f"&step=select_question&trivia_folder={trivia_folder}"
@@ -276,7 +275,7 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
         valid_digits_list.extend(["0", "1"])
 
     prompt_str = ".".join(prompt_list)
-    valid_digits_str = ",".join(valid_digits_list)
+    valid_digits_str = "".join(valid_digits_list)
 
     return response_read(prompt_str, "dtmf", "digits", 1, 1, 7, "b", valid_digits_str) + \
            f"&step=select_item&q_idx={q_idx}&trivia_folder={trivia_folder}"
@@ -312,16 +311,12 @@ def build_action_menu_prompt(q_idx, letter, file_path, trivia_folder):
     """
     שלב 3: תפריט M1009
     """
-    return response_read("m-1009", "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,*") + \
+    return response_read("m-1009", "dtmf", "digits", 1, 1, 7, "b", "1234*") + \
            f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
 
 def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder, token):
     """
-    טיפול בתפריט M1009
-    1 - שמיעה
-    2 - אישור -> מעבר לתפריט אחרי עריכה
-    3 - הקלטה מחודשת -> דריסת הקובץ בשרת ומעבר לתפריט אחרי עריכה
-    4 - מחיקה -> מחיקה בשרת ומעבר לתפריט אחרי עריכה
+    טיפול בפעולות תפריט M1009
     """
     if dtmf == '*':
         return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
@@ -329,7 +324,7 @@ def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folde
     if dtmf == '1':
         # 1 - שמיעת ההקלטה
         play_prompt = f"f-{file_path}.m-1009"
-        return response_read(play_prompt, "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,*") + \
+        return response_read(play_prompt, "dtmf", "digits", 1, 1, 7, "b", "1234*") + \
                f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
 
     elif dtmf == '2':
@@ -342,7 +337,7 @@ def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folde
                f"&save_file_path={file_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
     elif dtmf == '4':
-        # 4 - מחיקת הקובץ משרת ימות המשיח
+        # 4 - מחיקת הקובץ
         delete_file_from_yemot(token, file_path)
         return build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה נמחקה בהצלחה.")
 
@@ -357,7 +352,7 @@ def build_post_edit_prompt(q_idx, trivia_folder, prefix_message=""):
     if prefix_message:
         prompt_text = f"t-{prefix_message}." + prompt_text
 
-    return response_read(prompt_text, "dtmf", "digits", 1, 1, 7, "b", "1,2,3,*") + \
+    return response_read(prompt_text, "dtmf", "digits", 1, 1, 7, "b", "123*") + \
            f"&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
 def handle_post_edit_menu(dtmf, q_idx, trivia_data, trivia_folder):
@@ -403,11 +398,11 @@ def trivia_endpoint():
 
         response_text = ""
 
-        # 1. זיהוי מיוחד של חזרה מהקלטה קולית (מקש 3)
+        # 1. זיהוי מיוחד עבור חזרה מהקלטה קולית (סיום הקלטה במקש 3)
         if params.get("rec_file") or params.get("ApiVoicePath"):
             response_text = build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה נשמרה בהצלחה.")
 
-        # 2. ניהול הניתוב ההרמטי - מונע לופים!
+        # 2. ניהול הניתוב ההרמטי
         elif step in ['init', 'select_question']:
             if dtmf != '' and dtmf != '*' and dtmf.isdigit():
                 selected_idx = int(dtmf)
@@ -427,7 +422,6 @@ def trivia_endpoint():
                 else:
                     target_file_path = f"{trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
                     
-                # מעבר ישיר במאה אחוז לתפריט M1009!
                 response_text = build_action_menu_prompt(q_idx, letter, target_file_path, trivia_folder)
             else:
                 response_text = handle_select_item(dtmf, q_idx, trivia_data, trivia_folder)
