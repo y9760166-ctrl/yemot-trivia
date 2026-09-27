@@ -45,8 +45,11 @@ def get_today_hebrew_date_string():
 
 def extract_token(params):
     """
-    חילוץ הטוקן אך ורק מתוך בקשת ה-API שנשלחה מקובץ ה-ext.ini!
+    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת מ-ext.ini או משתנה הסביבה
     """
+    token = os.environ.get("YEMOT_TOKEN", "").strip()
+    if token:
+        return token
     if params.get("token"):
         return str(params.get("token")).strip()
     if params.get("ApiToken"):
@@ -65,7 +68,7 @@ def extract_dtmf(params):
 
 def delete_file_from_yemot(token, file_path):
     """
-    מחיקת קובץ משרתי ימות המשיח באמצעות הטוקן שהתקבל מ-ext.ini
+    מחיקת קובץ משרתי ימות המשיח
     """
     if not token:
         return
@@ -234,6 +237,9 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
     """
     שלב 2: תפריט בחירת הפריט לעריכה בשאלה
     """
+    if q_idx <= 0:
+        q_idx = 1
+
     questions = trivia_data.get("questions", [])
     
     target_question = None
@@ -241,7 +247,7 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
         target_question = questions[q_idx - 1]
     
     date_folder = trivia_data.get("date_folder", get_today_hebrew_date_string())
-    q_folder_name = f"{(q_idx - 1):03d}" if q_idx > 0 else "000"
+    q_folder_name = f"{(q_idx - 1):03d}"
     q_full_path = f"{trivia_folder}/{date_folder}/{q_folder_name}"
 
     if target_question and target_question.get("files"):
@@ -277,7 +283,7 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
 
 def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
     """
-    טיפול בבחירת רכיב לעריכה בשלבים
+    טיפול בבחירת פריט לעריכה
     """
     if dtmf == '*':
         return handle_select_question('', trivia_data, trivia_folder)
@@ -304,18 +310,18 @@ def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
 
 def build_action_menu_prompt(q_idx, letter, file_path, trivia_folder):
     """
-    שלב 3: תפריט פעולות M1009
+    שלב 3: תפריט M1009
     """
     return response_read("m-1009", "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,*") + \
            f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
 
 def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder, token):
     """
-    טיפול בפעולות תפריט M1009
-    1 - שמיעת הקלטה
-    2 - אישור הקלטה -> מעבר לתפריט שאחרי עריכה
-    3 - הקלטה מחודשת -> דריסת הקובץ בשרת ומעבר לתפריט שאחרי עריכה
-    4 - מחיקה -> מחיקת הקובץ ומעבר לתפריט שאחרי עריכה
+    טיפול בתפריט M1009
+    1 - שמיעה
+    2 - אישור -> מעבר לתפריט אחרי עריכה
+    3 - הקלטה מחודשת -> דריסת הקובץ בשרת ומעבר לתפריט אחרי עריכה
+    4 - מחיקה -> מחיקה בשרת ומעבר לתפריט אחרי עריכה
     """
     if dtmf == '*':
         return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
@@ -327,7 +333,7 @@ def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folde
                f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
 
     elif dtmf == '2':
-        # 2 - אישור ההקלטה
+        # 2 - אישור ההקלטה -> מעבר לתפריט שאחרי עריכה
         return build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה אושרה בהצלחה.")
 
     elif dtmf == '3':
@@ -336,7 +342,7 @@ def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folde
                f"&save_file_path={file_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
     elif dtmf == '4':
-        # 4 - מחיקת הקובץ
+        # 4 - מחיקת הקובץ משרת ימות המשיח
         delete_file_from_yemot(token, file_path)
         return build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה נמחקה בהצלחה.")
 
@@ -389,7 +395,6 @@ def trivia_endpoint():
         file_path = params.get('file_path', '')
         trivia_folder = params.get('trivia_folder', '1')
 
-        # חילוץ הטוקן אך ורק מקובץ ה-ext.ini!
         token = extract_token(params)
         dtmf = extract_dtmf(params)
 
@@ -398,10 +403,11 @@ def trivia_endpoint():
 
         response_text = ""
 
-        # זיהוי מיוחד עבור חזרה מהקלטה קולית (סיום הקלטה במקש 3)
+        # 1. זיהוי מיוחד של חזרה מהקלטה קולית (מקש 3)
         if params.get("rec_file") or params.get("ApiVoicePath"):
             response_text = build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה נשמרה בהצלחה.")
 
+        # 2. ניהול הניתוב ההרמטי - מונע לופים!
         elif step in ['init', 'select_question']:
             if dtmf != '' and dtmf != '*' and dtmf.isdigit():
                 selected_idx = int(dtmf)
@@ -421,6 +427,7 @@ def trivia_endpoint():
                 else:
                     target_file_path = f"{trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
                     
+                # מעבר ישיר במאה אחוז לתפריט M1009!
                 response_text = build_action_menu_prompt(q_idx, letter, target_file_path, trivia_folder)
             else:
                 response_text = handle_select_item(dtmf, q_idx, trivia_data, trivia_folder)
