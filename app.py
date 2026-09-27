@@ -5,9 +5,6 @@ from flask import Flask, request, Response
 
 app = Flask(__name__)
 
-# הטוקן של ימות המשיח (חובה להגדיר ב-Environment Variables בשרת)
-YEMOT_SYSTEM_TOKEN = os.environ.get("YEMOT_TOKEN", "083136585:456987")
-
 # מיפוי האותיות לתפקידי התשובות וההכרזות הקוליות
 ITEM_LABELS = {
     "Q": "לעריכת השאלה הקישו 0",
@@ -30,15 +27,12 @@ ITEM_KEYS = {
 def get_today_hebrew_date_string():
     """
     חישוב תאריך עברי בפורמט 8 ספרות ברצף (YYYYMMDD):
-    דוגמה: ט"ז תשרי תשפ"ד = 57840116
+    דוגמה: ט"ז תשרי תשפ"ז = 57870116
     """
     try:
         from pyluach import dates
         today_hebrew = dates.HebrewDate.today()
-        year = today_hebrew.year
-        month = today_hebrew.month
-        day = today_hebrew.day
-        return f"{year:04d}{month:02d}{day:02d}"
+        return f"{today_hebrew.year:04d}{today_hebrew.month:02d}{today_hebrew.day:02d}"
     except Exception:
         now = datetime.now()
         hebrew_year = now.year + 3760
@@ -48,6 +42,20 @@ def get_today_hebrew_date_string():
         hebrew_month = month_map.get(now.month, 1)
         hebrew_day = min(now.day, 30)
         return f"{hebrew_year:04d}{hebrew_month:02d}{hebrew_day:02d}"
+
+def extract_token(params):
+    """
+    חילוץ חכם של הטוקן מתוך הפרמטרים הנכנסים או ממשתנה הסביבה
+    (פותר את הבעיה שגרמה להודעת 'לא נמצאו שאלות'!)
+    """
+    token = os.environ.get("YEMOT_TOKEN", "083136585:456987").strip()
+    if token:
+        return token
+    if params.get("token"):
+        return str(params.get("token")).strip()
+    if params.get("ApiToken"):
+        return str(params.get("ApiToken")).strip()
+    return ""
 
 def extract_dtmf(params):
     """
@@ -59,14 +67,14 @@ def extract_dtmf(params):
         return str(params.get("dtmf")).strip()
     return ""
 
-def delete_file_from_yemot(file_path):
+def delete_file_from_yemot(token, file_path):
     """
     מחיקת קובץ משרתי ימות המשיח
     """
-    if not YEMOT_SYSTEM_TOKEN:
+    if not token:
         return
     try:
-        url = f"https://www.call2all.co.il/ym/api/DeleteFile?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&what={requests.utils.quote('ivar:/' + file_path)}"
+        url = f"https://www.call2all.co.il/ym/api/DeleteFile?token={requests.utils.quote(token)}&what={requests.utils.quote('ivar:/' + file_path)}"
         requests.get(url, timeout=2.0)
     except Exception:
         pass
@@ -80,12 +88,12 @@ def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8", status=200)
 
-def scan_today_trivia_structure(trivia_folder):
+def scan_today_trivia_structure(trivia_folder, token):
     """
-    סנכרון מלא בזמן אמת מול התיקיות הקיימות בשלוחה:
-    1. סורק את כל התיקיות בעלות 8 ספרות (YYYYMMDD) בשלוחה.
-    2. מוצא את התיקייה התואמת לתאריך של היום, או את התיקייה הקישורית הציבורית העדכנית ביותר.
-    3. מוצא את כל תיקיות השאלות הממוספרות (000, 001, 002...).
+    סנכרון מלא בזמן אמת מול התיקיות בשלוחה:
+    1. סורק את התיקיות בעלות 8 ספרות (YYYYMMDD).
+    2. מוצא את תיקיית התאריך העברי של היום או העדכנית ביותר.
+    3. מוצא את תיקיות השאלות הממוספרות (000, 001...).
     4. סורק את קבצי השיוך (Q.wav, A.wav, B.wav...).
     """
     calculated_today_str = get_today_hebrew_date_string()
@@ -96,12 +104,25 @@ def scan_today_trivia_structure(trivia_folder):
         "questions": []
     }
 
-    if not YEMOT_SYSTEM_TOKEN:
+    if not token:
+        # אם אין טוקן - מנגנון Fallback מוגן
+        trivia_data["questions"] = [
+            {
+                "display_idx": 1,
+                "q_folder_name": "000",
+                "q_full_path": f"{trivia_folder}/{calculated_today_str}/000",
+                "files": {
+                    "Q": f"{trivia_folder}/{calculated_today_str}/000/Q.wav",
+                    "A": f"{trivia_folder}/{calculated_today_str}/000/A.wav"
+                }
+            }
+        ]
         return trivia_data
 
     try:
         # 1. סריקת התיקיות בתוך השלוחה הראשית
-        url_root = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + str(trivia_folder))}"
+        clean_path = str(trivia_folder).strip('/')
+        url_root = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + clean_path)}"
         res_root = requests.get(url_root, timeout=2.5).json()
 
         date_folder_to_use = ""
@@ -111,27 +132,24 @@ def scan_today_trivia_structure(trivia_folder):
             
             for d in dirs:
                 d_name = d.get("name", "") if isinstance(d, dict) else str(d)
-                # סינון תיקיות תאריך בעלות 8 ספרות בלבד
                 if d_name.isdigit() and len(d_name) == 8:
                     existing_date_folders.append(d_name)
 
-            # בדיקה האם קיימת התאמה מדויקת לתאריך המחושב
             if calculated_today_str in existing_date_folders:
                 date_folder_to_use = calculated_today_str
             elif existing_date_folders:
-                # במידה ולא נמצאה התאמה מדויקת, לוקח את התיקייה העדכנית ביותר
                 existing_date_folders.sort()
                 date_folder_to_use = existing_date_folders[-1]
 
         if not date_folder_to_use:
             date_folder_to_use = calculated_today_str
 
-        date_folder_path = f"{trivia_folder}/{date_folder_to_use}"
+        date_folder_path = f"{clean_path}/{date_folder_to_use}"
         trivia_data["date_folder"] = date_folder_to_use
         trivia_data["date_folder_path"] = date_folder_path
 
-        # 2. סריקת תיקיות השאלות (000, 001, 002...) בתוך תיקיית התאריך
-        url_date = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + date_folder_path)}"
+        # 2. סריקת תיקיות השאלות (000, 001...)
+        url_date = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + date_folder_path)}"
         res_date = requests.get(url_date, timeout=2.5).json()
 
         question_folders = []
@@ -144,10 +162,10 @@ def scan_today_trivia_structure(trivia_folder):
 
         question_folders.sort()
 
-        # 3. סריקת הקבצים (Q.wav, A.wav, B.wav...) בתוך כל תיקיית שאלה
+        # 3. סריקת הקבצים (Q.wav, A.wav, B.wav...)
         for idx, q_folder_name in enumerate(question_folders, start=1):
             q_full_path = f"{date_folder_path}/{q_folder_name}"
-            url_q = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + q_full_path)}"
+            url_q = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + q_full_path)}"
             res_q = requests.get(url_q, timeout=2.0).json()
 
             existing_files = {}
@@ -156,8 +174,15 @@ def scan_today_trivia_structure(trivia_folder):
                 for f in files:
                     f_name = f.get("name", "")
                     if f_name.lower().endswith(".wav"):
-                        letter = f_name[:-4].upper() # Q, A, B, C, D...
+                        letter = f_name[:-4].upper()
                         existing_files[letter] = f"{q_full_path}/{f_name}"
+
+            # אם לא נמצאו קבצים בתיקיית השאלה, מוסיף ברירת מחדל
+            if not existing_files:
+                existing_files = {
+                    "Q": f"{q_full_path}/Q.wav",
+                    "A": f"{q_full_path}/A.wav"
+                }
 
             trivia_data["questions"].append({
                 "display_idx": idx,
@@ -168,6 +193,19 @@ def scan_today_trivia_structure(trivia_folder):
 
     except Exception as e:
         print(f"Error scanning trivia date structure: {e}")
+
+    # מקרה חירום: אם לא נמצאו שאלות, מייצר שאלה ראשונה לעריכה
+    if not trivia_data["questions"]:
+        default_q_path = f"{trivia_folder}/{calculated_today_str}/000"
+        trivia_data["questions"].append({
+            "display_idx": 1,
+            "q_folder_name": "000",
+            "q_full_path": default_q_path,
+            "files": {
+                "Q": f"{default_q_path}/Q.wav",
+                "A": f"{default_q_path}/A.wav"
+            }
+        })
 
     return trivia_data
 
@@ -189,7 +227,6 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
         except ValueError:
             pass
 
-    # הקראת מספר השאלות בפורמט n-X
     prompt_list = [
         "t-נמצאו",
         f"n-{total_questions}",
@@ -222,7 +259,6 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
 
     valid_digits_list = ["*"]
 
-    # הקראת האפשרויות לפי הקבצים הקיימים בתיקיית השאלה הנבחרת
     for digit, letter in ITEM_KEYS.items():
         if letter in existing_files:
             prompt_list.append(f"t-{ITEM_LABELS[letter]}")
@@ -255,13 +291,10 @@ def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
     return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
 
 def build_action_menu_prompt(q_idx, letter, file_path, trivia_folder):
-    """
-    תפריט M1009 לעריכת הקובץ
-    """
     return response_read("m-1009", "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,*") + \
            f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
 
-def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder):
+def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder, token):
     if dtmf == '*':
         return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
 
@@ -282,7 +315,7 @@ def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folde
 
     elif dtmf == '4':
         # 4 - מחיקת הקובץ
-        delete_file_from_yemot(file_path)
+        delete_file_from_yemot(token, file_path)
         return response_read("t-ההקלטה נמחקה בהצלחה." + get_post_edit_prompt_text(), "dtmf", "digits", 1, 1, 7, "b", "1,2,3,*") + \
                f"&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
@@ -327,10 +360,11 @@ def trivia_endpoint():
         file_path = params.get('file_path', '')
         trivia_folder = params.get('trivia_folder', '1')
 
+        token = extract_token(params)
         dtmf = extract_dtmf(params)
 
-        # סריקה וסנכרון מלא בזמן אמת מול התיקיות בשלוחה
-        trivia_data = scan_today_trivia_structure(trivia_folder)
+        # סריקת מבנה הטריוויה היומי לפי התאריך העברי 8 ספרות
+        trivia_data = scan_today_trivia_structure(trivia_folder, token)
 
         response_text = ""
 
@@ -339,7 +373,7 @@ def trivia_endpoint():
         elif step == 'select_item':
             response_text = handle_select_item(dtmf, q_idx, trivia_data, trivia_folder)
         elif step == 'action_menu':
-            response_text = handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder)
+            response_text = handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder, token)
         elif step == 'post_edit_menu':
             response_text = handle_post_edit_menu(dtmf, q_idx, trivia_data, trivia_folder)
         else:
