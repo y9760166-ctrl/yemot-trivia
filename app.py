@@ -89,7 +89,7 @@ def send_yemot_response(body_text):
 
 def scan_today_trivia_structure(trivia_folder, token):
     """
-    סריקת מבנה הטריוויה היומי לפי התאריך העברי 8 ספרות
+    סריקת מבנה הטריוויה היומי
     """
     calculated_today_str = get_today_hebrew_date_string()
     
@@ -141,7 +141,6 @@ def scan_today_trivia_structure(trivia_folder, token):
         trivia_data["date_folder"] = date_folder_to_use
         trivia_data["date_folder_path"] = date_folder_path
 
-        # סריקת תיקיות השאלות הממוספרות
         url_date = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + date_folder_path)}"
         res_date = requests.get(url_date, timeout=2.5).json()
 
@@ -155,7 +154,6 @@ def scan_today_trivia_structure(trivia_folder, token):
 
         question_folders.sort()
 
-        # סריקת הקבצים בתוך כל תיקיית שאלה
         for idx, q_folder_name in enumerate(question_folders, start=1):
             q_full_path = f"{date_folder_path}/{q_folder_name}"
             url_q = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + q_full_path)}"
@@ -202,7 +200,7 @@ def scan_today_trivia_structure(trivia_folder, token):
 
 def handle_select_question(dtmf, trivia_data, trivia_folder):
     """
-    שלב 1: בחירת מספר שאלה לניהול
+    שלב 1: הקראת תפריט בחירת מספר השאלה
     """
     questions = trivia_data.get("questions", [])
     total_questions = len(questions)
@@ -235,8 +233,11 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
 
 def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
     """
-    שלב 2: תפריט בחירת הפריט לעריכה בשאלה (שאלה/תשובה נכונה/תשובות שגויות)
+    שלב 2: תפריט בחירת הפריט לעריכה בשאלה - מציג את הרכיבים הזמינים
     """
+    if q_idx <= 0:
+        q_idx = 1
+
     questions = trivia_data.get("questions", [])
     
     target_question = None
@@ -244,7 +245,7 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
         target_question = questions[q_idx - 1]
     
     date_folder = trivia_data.get("date_folder", get_today_hebrew_date_string())
-    q_folder_name = f"{(q_idx - 1):03d}" if q_idx > 0 else "000"
+    q_folder_name = f"{(q_idx - 1):03d}"
     q_full_path = f"{trivia_folder}/{date_folder}/{q_folder_name}"
 
     if target_question and target_question.get("files"):
@@ -263,6 +264,7 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
 
     valid_digits_list = ["*"]
 
+    # הקראת האפשרויות הזמינות
     for digit, letter in ITEM_KEYS.items():
         if letter in existing_files:
             prompt_list.append(f"t-{ITEM_LABELS[letter]}")
@@ -280,7 +282,7 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
 
 def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
     """
-    טיפול בבחירת פריט בשלבים
+    טיפול בבחירת פריט לעריכה בשלב 2
     """
     if dtmf == '*':
         return handle_select_question('', trivia_data, trivia_folder)
@@ -313,18 +315,11 @@ def build_action_menu_prompt(q_idx, letter, file_path, trivia_folder):
            f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
 
 def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder, token):
-    """
-    טיפול בפעולות תפריט M1009
-    1 - שמיעת הקלטה
-    2 - אישור הקלטה -> מעבר לתפריט שאחרי עריכה
-    3 - הקלטה מחודשת -> דריסת הקובץ בשרת ומעבר לתפריט שאחרי עריכה
-    4 - מחיקה -> מחיקת הקובץ ומעבר לתפריט שאחרי עריכה
-    """
     if dtmf == '*':
         return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
 
     if dtmf == '1':
-        # 1 - שמיעת ההקלטה (ונשארים בתפריט ה-M1009)
+        # 1 - שמיעת ההקלטה
         play_prompt = f"f-{file_path}.m-1009"
         return response_read(play_prompt, "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,*") + \
                f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
@@ -339,7 +334,7 @@ def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folde
                f"&save_file_path={file_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
     elif dtmf == '4':
-        # 4 - מחיקת הקובץ משרת ימות המשיח
+        # 4 - מחיקת הקובץ
         delete_file_from_yemot(token, file_path)
         return build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה נמחקה בהצלחה.")
 
@@ -349,7 +344,6 @@ def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folde
 def build_post_edit_prompt(q_idx, trivia_folder, prefix_message=""):
     """
     שלב 4: תפריט שאחרי עריכה
-    "לעריכה נוספת בשאלה זו הקישו 1, לבחירת שאלה אחרת לניהול הקישו 2, ליציאה הקישו 3"
     """
     prompt_text = "t-לעריכה נוספת בשאלה זו הקישו 1 לבחירת שאלה אחרת לניהול הקישו 2 ליציאה הקישו 3"
     if prefix_message:
@@ -359,23 +353,13 @@ def build_post_edit_prompt(q_idx, trivia_folder, prefix_message=""):
            f"&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
 def handle_post_edit_menu(dtmf, q_idx, trivia_data, trivia_folder):
-    """
-    טיפול במקשים בתפריט שאחרי עריכה
-    1 - לעריכה נוספת בשאלה זו
-    2 - לבחירת שאלה אחרת לניהול
-    3 או * - ליציאה
-    """
     if dtmf == '1':
-        # חזרה לתפריט הפריטים של אותה שאלה
         return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
     elif dtmf == '2':
-        # חזרה לתפריט הראשוני של בחירת השאלות
         return handle_select_question('', trivia_data, trivia_folder)
     elif dtmf == '3' or dtmf == '*':
-        # יציאה וסיום שיחה
         return "id_list_message=t-תודה רבה היציאה בוצעה בהצלחה.&hangup=yes"
 
-    # במידה ולא הוקש מקש - השמעה חוזרת של תפריט אחרי עריכה
     return build_post_edit_prompt(q_idx, trivia_folder)
 
 @app.route('/api/trivia', methods=['GET', 'POST'])
@@ -408,17 +392,12 @@ def trivia_endpoint():
 
         response_text = ""
 
-        # ניהול הניתוב בין השלבים
+        # ניהול הניתוב ההרמטי - מונע לופים!
         if step in ['init', 'select_question']:
-            if dtmf != '' and dtmf != '*':
-                try:
-                    selected_idx = int(dtmf)
-                    if 1 <= selected_idx <= len(trivia_data.get("questions", [])):
-                        response_text = build_select_item_prompt(selected_idx, trivia_data, trivia_folder)
-                    else:
-                        response_text = handle_select_question(dtmf, trivia_data, trivia_folder)
-                except ValueError:
-                    response_text = handle_select_question(dtmf, trivia_data, trivia_folder)
+            if dtmf != '' and dtmf != '*' and dtmf.isdigit():
+                selected_idx = int(dtmf)
+                # מעבר ישיר במאה אחוז לתפריט עריכת הקבצים של השאלה שנבחרה!
+                response_text = build_select_item_prompt(selected_idx, trivia_data, trivia_folder)
             else:
                 response_text = handle_select_question(dtmf, trivia_data, trivia_folder)
 
@@ -442,11 +421,9 @@ def trivia_endpoint():
             response_text = handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder, token)
 
         elif step == 'post_edit_menu':
-            # לאחר ביצוע הקלטה מחודשת (או הקשת מקש בתפריט שאחרי עריכה)
             if dtmf != '':
                 response_text = handle_post_edit_menu(dtmf, q_idx, trivia_data, trivia_folder)
             else:
-                # הגעה יציבה לאחר סיום ההקלטה
                 response_text = build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה נשמרה בהצלחה.")
 
         else:
