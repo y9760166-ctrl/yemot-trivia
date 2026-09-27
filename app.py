@@ -84,13 +84,13 @@ def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, 
 
 def build_record_prompt(file_path, q_idx, trivia_folder):
     """
-    בניית פקודת הקלטה קולית תקנית שתדרוס את הקובץ הקיים בשלוחת הטריוויה ב-Yemot
+    בניית פקודת הקלטה קולית תקנית שתדרוס פיזית את הקובץ הקיים בשלוחת הטריוויה ב-Yemot
     """
     clean_path = str(file_path).strip('/')
     if not clean_path.startswith("ivar:/"):
         clean_path = "ivar:/" + clean_path
 
-    return f"read=t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית=rec_file,voice,1,10,60,b,#&save_file_path={clean_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
+    return f"read=t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית=rec_file,voice,1,10,60,b,no,#&save_file_path={clean_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8", status=200)
@@ -312,49 +312,10 @@ def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
         else:
             file_path = f"{trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
             
-        return build_action_menu_prompt(q_idx, letter, file_path, trivia_folder)
-
-    return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
-
-def build_action_menu_prompt(q_idx, letter, file_path, trivia_folder):
-    """
-    שלב 3: תפריט M1009
-    """
-    return response_read("m-1009", "dtmf", "digits", 1, 1, 7, "b", "1234*") + \
-           f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
-
-def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder, token):
-    """
-    טיפול בפעולות תפריט M1009
-    1 - שמיעת הקלטה
-    2 - אישור הקלטה -> מעבר לתפריט אחרי עריכה
-    3 - הקלטה מחודשת -> דריסת הקובץ בשרת ומעבר לתפריט אחרי עריכה
-    4 - מחיקה -> מחיקת הקובץ ומעבר לתפריט אחרי עריכה
-    """
-    if dtmf == '*':
-        return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
-
-    if dtmf == '1':
-        # 1 - שמיעת ההקלטה
-        play_prompt = f"f-{file_path}.m-1009"
-        return response_read(play_prompt, "dtmf", "digits", 1, 1, 7, "b", "1234*") + \
-               f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
-
-    elif dtmf == '2':
-        # 2 - אישור ההקלטה -> מעבר לתפריט שאחרי עריכה
-        return build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה אושרה בהצלחה.")
-
-    elif dtmf == '3':
-        # 3 - הקלטה מחודשת שתדרוס את הקובץ הקיים בשרת ימות המשיח!
+        # מעבר ישיר להקלטת הקובץ מחדש ודריסתו!
         return build_record_prompt(file_path, q_idx, trivia_folder)
 
-    elif dtmf == '4':
-        # 4 - מחיקת הקובץ משרת ימות המשיח
-        delete_file_from_yemot(token, file_path)
-        return build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה נמחקה בהצלחה.")
-
-    else:
-        return build_action_menu_prompt(q_idx, letter, file_path, trivia_folder)
+    return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
 
 def build_post_edit_prompt(q_idx, trivia_folder, prefix_message=""):
     """
@@ -410,7 +371,7 @@ def trivia_endpoint():
 
         response_text = ""
 
-        # 1. זיהוי מוגן ומפורש של סיום הקלטה קולית (חזרה במקש 3)
+        # 1. זיהוי מוגן ומפורש של סיום הקלטה קולית
         if params.get("rec_file") or params.get("ApiVoicePath") or params.get("save_file_path"):
             response_text = build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה נשמרה בהצלחה.")
 
@@ -434,12 +395,10 @@ def trivia_endpoint():
                 else:
                     target_file_path = f"{trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
                     
-                response_text = build_action_menu_prompt(q_idx, letter, target_file_path, trivia_folder)
+                # מעבר ישיר במאה אחוז להקלטת הקובץ מחדש ודריסתו!
+                response_text = build_record_prompt(target_file_path, q_idx, trivia_folder)
             else:
                 response_text = handle_select_item(dtmf, q_idx, trivia_data, trivia_folder)
-
-        elif step == 'action_menu':
-            response_text = handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder, token)
 
         elif step == 'post_edit_menu':
             if dtmf != '':
