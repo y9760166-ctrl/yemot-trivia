@@ -45,7 +45,7 @@ def get_today_hebrew_date_string():
 
 def extract_token(params):
     """
-    חילוץ אוטומטי של הטוקן אך ורק מתוך הבקשה הנכנסת מקובץ ה-ext.ini!
+    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת מקובץ ה-ext.ini!
     """
     if params.get("token"):
         return str(params.get("token")).strip()
@@ -79,9 +79,18 @@ def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, 
     """
     בניית פקודת read תקנית ומדויקת לימות המשיח
     """
-    # ניקוי פסיקים מ-valid_digits לתאימות מלאה מול מנוע ה-IVR
     clean_digits = str(valid_digits).replace(",", "")
     return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{clean_digits}"
+
+def build_record_prompt(file_path, q_idx, trivia_folder):
+    """
+    בניית פקודת הקלטה קולית תקנית שתדרוס את הקובץ הקיים בשלוחת הטריוויה ב-Yemot
+    """
+    clean_path = str(file_path).strip('/')
+    if not clean_path.startswith("ivar:/"):
+        clean_path = "ivar:/" + clean_path
+
+    return f"read=t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית=rec_file,voice,1,10,60,b,#&save_file_path={clean_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8", status=200)
@@ -317,6 +326,10 @@ def build_action_menu_prompt(q_idx, letter, file_path, trivia_folder):
 def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder, token):
     """
     טיפול בפעולות תפריט M1009
+    1 - שמיעת הקלטה
+    2 - אישור הקלטה -> מעבר לתפריט אחרי עריכה
+    3 - הקלטה מחודשת -> דריסת הקובץ בשרת ומעבר לתפריט אחרי עריכה
+    4 - מחיקה -> מחיקת הקובץ ומעבר לתפריט אחרי עריכה
     """
     if dtmf == '*':
         return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
@@ -333,11 +346,10 @@ def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folde
 
     elif dtmf == '3':
         # 3 - הקלטה מחודשת שתדרוס את הקובץ הקיים בשרת ימות המשיח!
-        return response_read("t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית", "rec_file", "voice", 1, 10, 60, "b", "#") + \
-               f"&save_file_path={file_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
+        return build_record_prompt(file_path, q_idx, trivia_folder)
 
     elif dtmf == '4':
-        # 4 - מחיקת הקובץ
+        # 4 - מחיקת הקובץ משרת ימות המשיח
         delete_file_from_yemot(token, file_path)
         return build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה נמחקה בהצלחה.")
 
@@ -398,8 +410,8 @@ def trivia_endpoint():
 
         response_text = ""
 
-        # 1. זיהוי מיוחד עבור חזרה מהקלטה קולית (סיום הקלטה במקש 3)
-        if params.get("rec_file") or params.get("ApiVoicePath"):
+        # 1. זיהוי מוגן ומפורש של סיום הקלטה קולית (חזרה במקש 3)
+        if params.get("rec_file") or params.get("ApiVoicePath") or params.get("save_file_path"):
             response_text = build_post_edit_prompt(q_idx, trivia_folder, "ההקלטה נשמרה בהצלחה.")
 
         # 2. ניהול הניתוב ההרמטי
