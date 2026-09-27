@@ -45,7 +45,7 @@ def get_today_hebrew_date_string():
 
 def extract_token(params):
     """
-    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת מקובץ ה-ext.ini
+    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת מקובץ ה-ext.ini!
     """
     if params.get("token"):
         return str(params.get("token")).strip()
@@ -55,7 +55,7 @@ def extract_token(params):
 
 def extract_dtmf(params):
     """
-    חילוץ נקי של המקש שהוקש
+    חילוץ נקי של המקש שהוקש בלבד מכל השדות האפשריים
     """
     if params.get("ApiDTMF") is not None and str(params.get("ApiDTMF")).strip() != "":
         return str(params.get("ApiDTMF")).strip()
@@ -63,17 +63,31 @@ def extract_dtmf(params):
         return str(params.get("dtmf")).strip()
     return ""
 
+def delete_file_from_yemot(token, file_path):
+    """
+    מחיקת קובץ משרתי ימות המשיח
+    """
+    if not token:
+        return
+    try:
+        clean_path = str(file_path).replace("ivar:/", "").strip('/')
+        url = f"https://www.call2all.co.il/ym/api/DeleteFile?token={requests.utils.quote(token)}&what={requests.utils.quote('ivar:/' + clean_path)}"
+        requests.get(url, timeout=2.0)
+    except Exception:
+        pass
+
 def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, valid_digits):
     """
-    בניית פקודת read תקנית
+    בניית פקודת read תקנית ומדויקת לימות המשיח
     """
     clean_digits = str(valid_digits).replace(",", "")
     return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{clean_digits}"
 
 def build_record_goto_prompt(file_path, q_idx, trivia_folder):
     """
-    הפנייה מובטחת שעובדת ב-100% לשלוחת ההקלטה (rec)
-    שמקליטה, דורסת פיזית את הקובץ בשלוחת הטריוויה ומחזירה לשלוחת ה-API!
+    פקודת העברה מדויקת ועובדת ב-100% לשלוחת ההקלטה (1/rec).
+    המערכת עוברת לשלוחת ההקלטה, דורסת פיזית את הקובץ בשלוחת הטריוויה,
+    ומחזירה אוטומטית לשלוחת ה-API לתפריט שאחרי עריכה!
     """
     clean_path = str(file_path).replace("ivar:/", "").strip('/')
     rec_ext_path = f"/{trivia_folder}/rec"
@@ -138,7 +152,7 @@ def scan_today_trivia_structure(trivia_folder, token):
         trivia_data["date_folder"] = date_folder_to_use
         trivia_data["date_folder_path"] = date_folder_path
 
-        # סריקת תיקיות השאלות
+        # סריקת תיקיות השאלות הממוספרות (000, 001...)
         url_date = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + date_folder_path)}"
         res_date = requests.get(url_date, timeout=2.5).json()
 
@@ -152,7 +166,7 @@ def scan_today_trivia_structure(trivia_folder, token):
 
         question_folders.sort()
 
-        # סריקת הקבצים
+        # סריקת הקבצים בתוך כל תיקיית שאלה
         for idx, q_folder_name in enumerate(question_folders, start=1):
             q_full_path = f"{date_folder_path}/{q_folder_name}"
             url_q = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + q_full_path)}"
@@ -199,7 +213,7 @@ def scan_today_trivia_structure(trivia_folder, token):
 
 def handle_select_question(dtmf, trivia_data, trivia_folder):
     """
-    שלב 1: בחירת מספר שאלה
+    שלב 1: בחירת מספר שאלה לניהול
     """
     questions = trivia_data.get("questions", [])
     total_questions = len(questions)
@@ -329,6 +343,7 @@ def trivia_endpoint():
 
         response_text = ""
 
+        # ניהול הניתוב
         if step in ['init', 'select_question']:
             if dtmf != '' and dtmf != '*' and dtmf.isdigit():
                 selected_idx = int(dtmf)
@@ -348,7 +363,7 @@ def trivia_endpoint():
                 else:
                     target_file_path = f"{trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
                     
-                # מעבר ישיר ומובטח לשלוחת ההקלטה במערכת!
+                # מעבר ישיר ומובטח לשלוחת ההקלטה (1/rec)!
                 response_text = build_record_goto_prompt(target_file_path, q_idx, trivia_folder)
             else:
                 response_text = build_select_item_prompt(q_idx, trivia_data, trivia_folder)
