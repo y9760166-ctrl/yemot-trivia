@@ -45,7 +45,7 @@ def get_today_hebrew_date_string():
 
 def extract_token(params):
     """
-    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת מקובץ ה-ext.ini!
+    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת מקובץ ה-ext.ini
     """
     if params.get("token"):
         return str(params.get("token")).strip()
@@ -78,22 +78,23 @@ def delete_file_from_yemot(token, file_path):
 
 def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, valid_digits):
     """
-    בניית פקודת read תקנית ומדויקת לימות המשיח
+    בניית פקודת read תקנית
     """
     clean_digits = str(valid_digits).replace(",", "")
     return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{clean_digits}"
 
 def build_record_goto_prompt(file_path, q_idx, trivia_folder):
     """
-    פקודת העברה מדויקת ועובדת ב-100% לשלוחת ההקלטה (1/rec).
-    המערכת עוברת לשלוחת ההקלטה, דורסת פיזית את הקובץ בשלוחת הטריוויה,
-    ומחזירה אוטומטית לשלוחת ה-API לתפריט שאחרי עריכה!
+    חישוב דינמי ומדויק לחלוטין של תת-שלוחת ההקלטה rec תחת השלוחה הנוכחית!
+    דוגמה: אם trivia_folder הוא 1/2, הניתוב יעבור ל- /1/2/rec
     """
-    clean_path = str(file_path).replace("ivar:/", "").strip('/')
-    rec_ext_path = f"/{trivia_folder}/rec"
-    return_api_path = f"/{trivia_folder}"
+    clean_file_path = str(file_path).replace("ivar:/", "").strip('/')
+    clean_trivia_folder = str(trivia_folder).replace("ivar:/", "").strip('/')
 
-    return f"go_to_folder={rec_ext_path}&record_file_path=ivar:/{clean_path}&end_goto={return_api_path}?step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
+    rec_ext_path = f"/{clean_trivia_folder}/rec"
+    return_api_path = f"/{clean_trivia_folder}"
+
+    return f"go_to_folder={rec_ext_path}&record_file_path=ivar:/{clean_file_path}&end_goto={return_api_path}?step=post_edit_menu&q_idx={q_idx}&trivia_folder={clean_trivia_folder}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8", status=200)
@@ -103,10 +104,11 @@ def scan_today_trivia_structure(trivia_folder, token):
     סריקת מבנה הטריוויה היומי לפי התאריך העברי 8 ספרות
     """
     calculated_today_str = get_today_hebrew_date_string()
-    
+    clean_trivia_folder = str(trivia_folder).replace("ivar:/", "").strip('/')
+
     trivia_data = {
         "date_folder": calculated_today_str,
-        "date_folder_path": f"{trivia_folder}/{calculated_today_str}",
+        "date_folder_path": f"{clean_trivia_folder}/{calculated_today_str}",
         "questions": []
     }
 
@@ -115,18 +117,17 @@ def scan_today_trivia_structure(trivia_folder, token):
             {
                 "display_idx": 1,
                 "q_folder_name": "000",
-                "q_full_path": f"{trivia_folder}/{calculated_today_str}/000",
+                "q_full_path": f"{clean_trivia_folder}/{calculated_today_str}/000",
                 "files": {
-                    "Q": f"{trivia_folder}/{calculated_today_str}/000/Q.wav",
-                    "A": f"{trivia_folder}/{calculated_today_str}/000/A.wav"
+                    "Q": f"{clean_trivia_folder}/{calculated_today_str}/000/Q.wav",
+                    "A": f"{clean_trivia_folder}/{calculated_today_str}/000/A.wav"
                 }
             }
         ]
         return trivia_data
 
     try:
-        clean_path = str(trivia_folder).strip('/')
-        url_root = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + clean_path)}"
+        url_root = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + clean_trivia_folder)}"
         res_root = requests.get(url_root, timeout=2.5).json()
 
         date_folder_to_use = ""
@@ -148,11 +149,11 @@ def scan_today_trivia_structure(trivia_folder, token):
         if not date_folder_to_use:
             date_folder_to_use = calculated_today_str
 
-        date_folder_path = f"{clean_path}/{date_folder_to_use}"
+        date_folder_path = f"{clean_trivia_folder}/{date_folder_to_use}"
         trivia_data["date_folder"] = date_folder_to_use
         trivia_data["date_folder_path"] = date_folder_path
 
-        # סריקת תיקיות השאלות הממוספרות (000, 001...)
+        # סריקת תיקיות השאלות
         url_date = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + date_folder_path)}"
         res_date = requests.get(url_date, timeout=2.5).json()
 
@@ -198,7 +199,7 @@ def scan_today_trivia_structure(trivia_folder, token):
         print(f"Error scanning trivia date structure: {e}")
 
     if not trivia_data["questions"]:
-        default_q_path = f"{trivia_folder}/{calculated_today_str}/000"
+        default_q_path = f"{clean_trivia_folder}/{calculated_today_str}/000"
         trivia_data["questions"].append({
             "display_idx": 1,
             "q_folder_name": "000",
@@ -213,7 +214,7 @@ def scan_today_trivia_structure(trivia_folder, token):
 
 def handle_select_question(dtmf, trivia_data, trivia_folder):
     """
-    שלב 1: בחירת מספר שאלה לניהול
+    שלב 1: בחירת מספר שאלה
     """
     questions = trivia_data.get("questions", [])
     total_questions = len(questions)
@@ -259,7 +260,8 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
     
     date_folder = trivia_data.get("date_folder", get_today_hebrew_date_string())
     q_folder_name = f"{(q_idx - 1):03d}"
-    q_full_path = f"{trivia_folder}/{date_folder}/{q_folder_name}"
+    clean_trivia_folder = str(trivia_folder).replace("ivar:/", "").strip('/')
+    q_full_path = f"{clean_trivia_folder}/{date_folder}/{q_folder_name}"
 
     if target_question and target_question.get("files"):
         existing_files = target_question.get("files")
@@ -343,7 +345,6 @@ def trivia_endpoint():
 
         response_text = ""
 
-        # ניהול הניתוב
         if step in ['init', 'select_question']:
             if dtmf != '' and dtmf != '*' and dtmf.isdigit():
                 selected_idx = int(dtmf)
@@ -356,14 +357,15 @@ def trivia_endpoint():
                 letter = ITEM_KEYS[dtmf]
                 date_folder = trivia_data.get("date_folder", get_today_hebrew_date_string())
                 q_folder_name = f"{(q_idx - 1):03d}" if q_idx > 0 else "000"
+                clean_trivia_folder = str(trivia_folder).replace("ivar:/", "").strip('/')
                 
                 target_q = trivia_data["questions"][q_idx - 1] if 0 < q_idx <= len(trivia_data.get("questions", [])) else None
                 if target_q and letter in target_q.get("files", {}):
                     target_file_path = target_q["files"][letter]
                 else:
-                    target_file_path = f"{trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
+                    target_file_path = f"{clean_trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
                     
-                # מעבר ישיר ומובטח לשלוחת ההקלטה (1/rec)!
+                # מעבר ישיר ומובטח לתת-שלוחת ההקלטה rec תחת השלוחה הנוכחית!
                 response_text = build_record_goto_prompt(target_file_path, q_idx, trivia_folder)
             else:
                 response_text = build_select_item_prompt(q_idx, trivia_data, trivia_folder)
