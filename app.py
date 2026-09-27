@@ -89,7 +89,7 @@ def build_record_prompt(file_path, q_idx, trivia_folder):
     """
     clean_path = str(file_path).replace("ivar:/", "").strip('/')
 
-    return f"read=t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית=rec_file,voice,1,10,60,b,no,no&save_file_path={clean_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
+    return f"read=t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית=rec_file,voice,1,10,60,b,no,#&save_file_path={clean_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8", status=200)
