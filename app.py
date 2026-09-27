@@ -45,8 +45,7 @@ def get_today_hebrew_date_string():
 
 def extract_token(params):
     """
-    חילוץ חכם של הטוקן מתוך הפרמטרים הנכנסים או ממשתנה הסביבה
-    (פותר את הבעיה שגרמה להודעת 'לא נמצאו שאלות'!)
+    חילוץ אוטומטי של הטוקן
     """
     token = os.environ.get("YEMOT_TOKEN", "083136585:456987").strip()
     if token:
@@ -59,7 +58,7 @@ def extract_token(params):
 
 def extract_dtmf(params):
     """
-    חילוץ נקי של המקש שהוקש
+    חילוץ נקי של המקש שהוקש בלבד
     """
     if params.get("ApiDTMF") is not None and str(params.get("ApiDTMF")).strip() != "":
         return str(params.get("ApiDTMF")).strip()
@@ -90,11 +89,7 @@ def send_yemot_response(body_text):
 
 def scan_today_trivia_structure(trivia_folder, token):
     """
-    סנכרון מלא בזמן אמת מול התיקיות בשלוחה:
-    1. סורק את התיקיות בעלות 8 ספרות (YYYYMMDD).
-    2. מוצא את תיקיית התאריך העברי של היום או העדכנית ביותר.
-    3. מוצא את תיקיות השאלות הממוספרות (000, 001...).
-    4. סורק את קבצי השיוך (Q.wav, A.wav, B.wav...).
+    סריקת מבנה הטריוויה היומי לפי התאריך העברי 8 ספרות
     """
     calculated_today_str = get_today_hebrew_date_string()
     
@@ -105,7 +100,6 @@ def scan_today_trivia_structure(trivia_folder, token):
     }
 
     if not token:
-        # אם אין טוקן - מנגנון Fallback מוגן
         trivia_data["questions"] = [
             {
                 "display_idx": 1,
@@ -120,7 +114,6 @@ def scan_today_trivia_structure(trivia_folder, token):
         return trivia_data
 
     try:
-        # 1. סריקת התיקיות בתוך השלוחה הראשית
         clean_path = str(trivia_folder).strip('/')
         url_root = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + clean_path)}"
         res_root = requests.get(url_root, timeout=2.5).json()
@@ -148,7 +141,7 @@ def scan_today_trivia_structure(trivia_folder, token):
         trivia_data["date_folder"] = date_folder_to_use
         trivia_data["date_folder_path"] = date_folder_path
 
-        # 2. סריקת תיקיות השאלות (000, 001...)
+        # סריקת תיקיות השאלות הממוספרות
         url_date = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + date_folder_path)}"
         res_date = requests.get(url_date, timeout=2.5).json()
 
@@ -162,7 +155,7 @@ def scan_today_trivia_structure(trivia_folder, token):
 
         question_folders.sort()
 
-        # 3. סריקת הקבצים (Q.wav, A.wav, B.wav...)
+        # סריקת הקבצים בתוך כל תיקיית שאלה
         for idx, q_folder_name in enumerate(question_folders, start=1):
             q_full_path = f"{date_folder_path}/{q_folder_name}"
             url_q = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + q_full_path)}"
@@ -177,7 +170,6 @@ def scan_today_trivia_structure(trivia_folder, token):
                         letter = f_name[:-4].upper()
                         existing_files[letter] = f"{q_full_path}/{f_name}"
 
-            # אם לא נמצאו קבצים בתיקיית השאלה, מוסיף ברירת מחדל
             if not existing_files:
                 existing_files = {
                     "Q": f"{q_full_path}/Q.wav",
@@ -194,7 +186,6 @@ def scan_today_trivia_structure(trivia_folder, token):
     except Exception as e:
         print(f"Error scanning trivia date structure: {e}")
 
-    # מקרה חירום: אם לא נמצאו שאלות, מייצר שאלה ראשונה לעריכה
     if not trivia_data["questions"]:
         default_q_path = f"{trivia_folder}/{calculated_today_str}/000"
         trivia_data["questions"].append({
@@ -219,6 +210,7 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
     if dtmf == '*':
         return "id_list_message=t-תודה ושלום.&hangup=yes"
 
+    # עיבוד הבחירה על פי הקשה אמיתית (1:1)
     if dtmf != '':
         try:
             selected_idx = int(dtmf)
@@ -227,6 +219,7 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
         except ValueError:
             pass
 
+    # הקראת מספר השאלות והמקשים בפורמט n-X
     prompt_list = [
         "t-נמצאו",
         f"n-{total_questions}",
@@ -259,6 +252,7 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
 
     valid_digits_list = ["*"]
 
+    # הקראת התפריט של השאלה שנבחרה
     for digit, letter in ITEM_KEYS.items():
         if letter in existing_files:
             prompt_list.append(f"t-{ITEM_LABELS[letter]}")
@@ -351,6 +345,8 @@ def trivia_endpoint():
             params.update(request.form.to_dict())
 
         step = params.get('step', 'init')
+        
+        # חילוץ מוגן של מספר השאלה שנבחרה
         try:
             q_idx = int(params.get('q_idx', 0))
         except ValueError:
@@ -363,11 +359,12 @@ def trivia_endpoint():
         token = extract_token(params)
         dtmf = extract_dtmf(params)
 
-        # סריקת מבנה הטריוויה היומי לפי התאריך העברי 8 ספרות
+        # סריקת מבנה הטריוויה היומי
         trivia_data = scan_today_trivia_structure(trivia_folder, token)
 
         response_text = ""
 
+        # ניהול השלבים
         if step in ['init', 'select_question']:
             response_text = handle_select_question(dtmf, trivia_data, trivia_folder)
         elif step == 'select_item':
