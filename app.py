@@ -4,8 +4,27 @@ from flask import Flask, request, Response
 
 app = Flask(__name__)
 
-# הטוקן של ימות המשיח (חובה להגדיר ב-Environment Variables בשרת האירוח)
+# הטוקן של ימות המשיח (חובה להגדיר ב-Environment Variables בשרת)
 YEMOT_SYSTEM_TOKEN = os.environ.get("YEMOT_TOKEN", "083136585:456987")
+
+# מיפוי האותיות לתפקידי התשובות וההכרזות הקוליות
+ITEM_LABELS = {
+    "Q": "לעריכת השאלה הקישו 0",
+    "A": "לעריכת התשובה הנכונה הקישו 1",
+    "B": "לעריכת התשובה השגויה הראשונה הקישו 2",
+    "C": "לעריכת התשובה השגויה השנייה הקישו 3",
+    "D": "לעריכת התשובה השגויה השלישית הקישו 4",
+    "E": "לעריכת התשובה השגויה הרביעית הקישו 5"
+}
+
+ITEM_KEYS = {
+    "0": "Q",
+    "1": "A",
+    "2": "B",
+    "3": "C",
+    "4": "D",
+    "5": "E"
+}
 
 def extract_dtmf(params):
     """
@@ -17,21 +36,9 @@ def extract_dtmf(params):
         return str(params.get("dtmf")).strip()
     return ""
 
-def get_trivia_file_path(folder, q_num, item_type, ans_num):
-    """
-    בניית נתיב הקובץ הפיזי בשלוחת הטריוויה
-    שאלה N: folder/00N.wav
-    תשובה M של שאלה N: folder/00N_M.wav
-    """
-    padded_q = f"{q_num:03d}"
-    if item_type == 'question':
-        return f"{folder}/{padded_q}.wav"
-    else:
-        return f"{folder}/{padded_q}_{ans_num}.wav"
-
 def delete_file_from_yemot(file_path):
     """
-    מחיקת קובץ משרתי ימות המשיח בזמן אמת
+    מחיקת קובץ משרתי ימות המשיח
     """
     if not YEMOT_SYSTEM_TOKEN:
         return
@@ -43,68 +50,93 @@ def delete_file_from_yemot(file_path):
 
 def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, valid_digits):
     """
-    בניית פקודת read תקנית ומדויקת לימות המשיח (ללא id_list_message כפול)
+    בניית פקודת read תקנית ומדויקת לימות המשיח
     """
     return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{valid_digits}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8", status=200)
 
-def scan_trivia_folder_dynamic(trivia_folder):
+def scan_trivia_structure(trivia_folder):
     """
-    סריקה דינמית בזמן אמת של הקבצים בשלוחת הטריוויה בשרת ימות המשיח
-    מזהה בדיוק כמה שאלות קיימות (001.wav, 002.wav...) וכמה תשובות לכל שאלה (001_1.wav...)
+    סריקה מקיפה ומדויקת לפי ארכיטקטורת הטריוויה של ימות המשיח:
+    1. איתור תיקיית התאריך של היום בתוך השלוחה.
+    2. איתור תיקיות השאלות הממוספרות (000, 001, 002...).
+    3. זיהוי הקבצים הפיזיים (Q.wav, A.wav, B.wav...) בתוך כל תיקיית שאלה.
     """
-    questions_dict = {}
+    trivia_data = {
+        "date_folder_path": "",
+        "questions": []
+    }
 
-    if YEMOT_SYSTEM_TOKEN:
-        try:
-            url = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + str(trivia_folder))}"
-            res = requests.get(url, timeout=2.5).json()
+    if not YEMOT_SYSTEM_TOKEN:
+        return trivia_data
 
-            if res.get("responseStatus") == "OK" and "files" in res:
-                files = res.get("files", [])
+    try:
+        # 1. פנייה לשלוחה הראשית לקבלת תיקיית התאריך
+        url_root = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + str(trivia_folder))}"
+        res_root = requests.get(url_root, timeout=2.5).json()
 
+        date_folder_name = ""
+        if res_root.get("responseStatus") == "OK":
+            dirs = res_root.get("dirs", []) or res_root.get("folders", [])
+            for d in dirs:
+                d_name = d.get("name", "") if isinstance(d, dict) else str(d)
+                if d_name and not d_name.startswith("."):
+                    date_folder_name = d_name
+                    break # לוקח את תיקיית התאריך הקיימת בשלוחה
+
+        if not date_folder_name:
+            date_folder_path = str(trivia_folder)
+        else:
+            date_folder_path = f"{trivia_folder}/{date_folder_name}"
+
+        trivia_data["date_folder_path"] = date_folder_path
+
+        # 2. פנייה לתיקיית התאריך לקבלת תיקיות השאלות (000, 001, 002...)
+        url_date = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + date_folder_path)}"
+        res_date = requests.get(url_date, timeout=2.5).json()
+
+        question_folders = []
+        if res_date.get("responseStatus") == "OK":
+            q_dirs = res_date.get("dirs", []) or res_date.get("folders", [])
+            for qd in q_dirs:
+                q_name = qd.get("name", "") if isinstance(qd, dict) else str(qd)
+                if q_name.isdigit():
+                    question_folders.append(q_name)
+
+        question_folders.sort()
+
+        # 3. סריקת הקבצים בתוך כל תיקיית שאלה (Q.wav, A.wav, B.wav...)
+        for idx, q_folder_name in enumerate(question_folders, start=1):
+            q_full_path = f"{date_folder_path}/{q_folder_name}"
+            url_q = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + q_full_path)}"
+            res_q = requests.get(url_q, timeout=2.0).json()
+
+            existing_files = {}
+            if res_q.get("responseStatus") == "OK":
+                files = res_q.get("files", [])
                 for f in files:
-                    name = f.get("name", "")
-                    if name.endswith(".wav"):
-                        base_name = name[:-4]
+                    f_name = f.get("name", "")
+                    if f_name.lower().endswith(".wav"):
+                        letter = f_name[:-4].upper() # Q, A, B, C, D...
+                        existing_files[letter] = f"{q_full_path}/{f_name}"
 
-                        # זיהוי קובץ שאלה (פורמט: 001, 002...)
-                        if base_name.isdigit() and len(base_name) == 3:
-                            q_id = int(base_name)
-                            if q_id not in questions_dict:
-                                questions_dict[q_id] = 0
+            trivia_data["questions"].append({
+                "display_idx": idx,
+                "q_folder_name": q_folder_name,
+                "q_full_path": q_full_path,
+                "files": existing_files
+            })
 
-                        # זיהוי קובץ תשובה (פורמט: 001_1, 001_2...)
-                        elif "_" in base_name:
-                            parts = base_name.split("_")
-                            if len(parts) == 2 and parts[0].isdigit() and len(parts[0]) == 3 and parts[1].isdigit():
-                                q_id = int(parts[0])
-                                ans_id = int(parts[1])
-                                if q_id not in questions_dict:
-                                    questions_dict[q_id] = ans_id
-                                else:
-                                    questions_dict[q_id] = max(questions_dict[q_id], ans_id)
+    except Exception as e:
+        print(f"Error scanning trivia structure: {e}")
 
-        except Exception as e:
-            print(f"Error scanning Yemot folder: {e}")
+    return trivia_data
 
-    # המרה לרשימה ממוינת של שאלות
-    questions_list = []
-    sorted_q_ids = sorted(questions_dict.keys())
-
-    for q_id in sorted_q_ids:
-        ans_count = questions_dict[q_id]
-        # אם קיימת שאלה אך לא נמצאו קבצי תשובות, ברירת מחדל היא תשובה 1
-        if ans_count == 0:
-            ans_count = 1
-        questions_list.append({"q_num": q_id, "answersCount": ans_count})
-
-    return questions_list
-
-def handle_select_question(dtmf, questions_list, trivia_folder):
-    total_questions = len(questions_list)
+def handle_select_question(dtmf, trivia_data, trivia_folder):
+    questions = trivia_data.get("questions", [])
+    total_questions = len(questions)
 
     if total_questions == 0:
         return "id_list_message=t-לא נמצאו הקלטות טריוויה עבור היום. להתראות.&hangup=yes"
@@ -116,12 +148,11 @@ def handle_select_question(dtmf, questions_list, trivia_folder):
         try:
             selected_idx = int(dtmf)
             if 1 <= selected_idx <= total_questions:
-                selected_q_num = questions_list[selected_idx - 1]["q_num"]
-                return build_select_item_prompt(selected_q_num, questions_list, trivia_folder)
+                return build_select_item_prompt(selected_idx, trivia_data, trivia_folder)
         except ValueError:
             pass
 
-    # בניית הודעת בחירת השאלה
+    # הקראת כמות השאלות הקיימות (n-X)
     prompt_list = [
         "t-נמצאו",
         f"n-{total_questions}",
@@ -142,115 +173,101 @@ def handle_select_question(dtmf, questions_list, trivia_folder):
     return response_read(prompt_str, "dtmf", "digits", 1, 1, 7, "b", valid_digits_str) + \
            f"&step=select_question&trivia_folder={trivia_folder}"
 
-def build_select_item_prompt(q_num, questions_list, trivia_folder):
-    # מציאת השאלה שנבחרה מתוך הרשימה הדינמית
-    target_q = None
-    for q in questions_list:
-        if q["q_num"] == q_num:
-            target_q = q
-            break
-
-    if not target_q:
-        target_q = questions_list[0] if questions_list else {"q_num": 1, "answersCount": 1}
-
-    total_answers = target_q["answersCount"]
+def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
+    questions = trivia_data.get("questions", [])
+    question = questions[q_idx - 1] if 0 < q_idx <= len(questions) else questions[0]
+    existing_files = question.get("files", {})
 
     prompt_list = [
         "t-שאלה מספר",
-        f"n-{q_num}",
-        "t-בשאלה זו יש",
-        f"n-{total_answers}",
-        "t-תשובות לעריכת הקלטת השאלה הקישו",
-        "n-0"
+        f"n-{q_idx}"
     ]
 
-    valid_digits_list = ["0", "*"]
-    for i in range(1, total_answers + 1):
-        prompt_list.append("t-לעריכת תשובה")
-        prompt_list.append(f"n-{i}")
-        prompt_list.append("t-הקישו")
-        prompt_list.append(f"n-{i}")
-        valid_digits_list.append(str(i))
+    valid_digits_list = ["*"]
+
+    # בניית הודעת התפריט לפי הקבצים הקיימים בתיקיית השאלה
+    for digit, letter in ITEM_KEYS.items():
+        if letter in existing_files:
+            prompt_list.append(f"t-{ITEM_LABELS[letter]}")
+            valid_digits_list.append(digit)
 
     prompt_str = ".".join(prompt_list)
     valid_digits_str = ",".join(valid_digits_list)
 
     return response_read(prompt_str, "dtmf", "digits", 1, 1, 7, "b", valid_digits_str) + \
-           f"&step=select_item&q_num={q_num}&trivia_folder={trivia_folder}"
+           f"&step=select_item&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
-def handle_select_item(dtmf, q_num, questions_list, trivia_folder):
-    target_q = None
-    for q in questions_list:
-        if q["q_num"] == q_num:
-            target_q = q
-            break
+def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
+    questions = trivia_data.get("questions", [])
+    question = questions[q_idx - 1] if 0 < q_idx <= len(questions) else None
 
-    if not target_q:
-        return handle_select_question('', questions_list, trivia_folder)
+    if not question:
+        return handle_select_question('', trivia_data, trivia_folder)
 
     if dtmf == '*':
-        return handle_select_question('', questions_list, trivia_folder)
+        return handle_select_question('', trivia_data, trivia_folder)
 
-    total_answers = target_q["answersCount"]
+    existing_files = question.get("files", {})
 
-    if dtmf != '':
-        try:
-            choice = int(dtmf)
-            if choice == 0:
-                return build_action_menu_prompt(q_num, 'question', 0, trivia_folder)
-            elif 1 <= choice <= total_answers:
-                return build_action_menu_prompt(q_num, 'answer', choice, trivia_folder)
-        except ValueError:
-            pass
+    if dtmf in ITEM_KEYS:
+        letter = ITEM_KEYS[dtmf]
+        if letter in existing_files:
+            file_path = existing_files[letter]
+            return build_action_menu_prompt(q_idx, letter, file_path, trivia_folder)
 
-    return build_select_item_prompt(q_num, questions_list, trivia_folder)
+    return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
+
+def build_action_menu_prompt(q_idx, letter, file_path, trivia_folder):
+    """
+    תפריט עריכת הקלטה (M1009)
+    """
+    return response_read("m-1009", "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,*") + \
+           f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
+
+def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder):
+    if dtmf == '*':
+        return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
+
+    if dtmf == '1':
+        # 1 - שמיעת ההקלטה
+        play_prompt = f"f-{file_path}.m-1009"
+        return response_read(play_prompt, "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,*") + \
+               f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
+
+    elif dtmf == '2':
+        # 2 - אישור ההקלטה
+        return build_post_edit_prompt(q_idx, trivia_folder)
+
+    elif dtmf == '3':
+        # 3 - הקלטה מחודשת ושמירה ישירה במיקום המדויק!
+        return response_read("t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית", "rec_file", "voice", 1, 10, 60, "b", "#") + \
+               f"&save_file_path={file_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
+
+    elif dtmf == '4':
+        # 4 - מחיקת הקובץ
+        delete_file_from_yemot(file_path)
+        return response_read("t-ההקלטה נמחקה בהצלחה." + get_post_edit_prompt_text(), "dtmf", "digits", 1, 1, 7, "b", "1,2,3,*") + \
+               f"&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
+
+    else:
+        return build_action_menu_prompt(q_idx, letter, file_path, trivia_folder)
 
 def get_post_edit_prompt_text():
     return "t-לעריכה נוספת בשאלה זו הקישו 1 לבחירת שאלה אחרת לניהול הקישו 2 ליציאה הקישו 3"
 
-def build_post_edit_prompt(q_num, trivia_folder):
+def build_post_edit_prompt(q_idx, trivia_folder):
     return response_read(get_post_edit_prompt_text(), "dtmf", "digits", 1, 1, 7, "b", "1,2,3,*") + \
-           f"&step=post_edit_menu&q_num={q_num}&trivia_folder={trivia_folder}"
+           f"&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
-def build_action_menu_prompt(q_num, item_type, ans_num, trivia_folder):
-    return response_read("m-1009", "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,*") + \
-           f"&step=action_menu&q_num={q_num}&item_type={item_type}&ans_num={ans_num}&trivia_folder={trivia_folder}"
-
-def handle_action_menu(dtmf, q_num, item_type, ans_num, questions_list, trivia_folder):
-    if dtmf == '*':
-        return build_select_item_prompt(q_num, questions_list, trivia_folder)
-
-    file_path = get_trivia_file_path(trivia_folder, q_num, item_type, ans_num)
-
+def handle_post_edit_menu(dtmf, q_idx, trivia_data, trivia_folder):
     if dtmf == '1':
-        play_prompt = f"f-{file_path}.m-1009"
-        return response_read(play_prompt, "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,*") + \
-               f"&step=action_menu&q_num={q_num}&item_type={item_type}&ans_num={ans_num}&trivia_folder={trivia_folder}"
-
+        return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
     elif dtmf == '2':
-        return build_post_edit_prompt(q_num, trivia_folder)
-
-    elif dtmf == '3':
-        return response_read("t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית", "rec_file", "voice", 1, 10, 60, "b", "#") + \
-               f"&save_file_path={file_path}&step=post_edit_menu&q_num={q_num}&trivia_folder={trivia_folder}"
-
-    elif dtmf == '4':
-        delete_file_from_yemot(file_path)
-        return response_read("t-ההקלטה נמחקה בהצלחה." + get_post_edit_prompt_text(), "dtmf", "digits", 1, 1, 7, "b", "1,2,3,*") + \
-               f"&step=post_edit_menu&q_num={q_num}&trivia_folder={trivia_folder}"
-
-    else:
-        return build_action_menu_prompt(q_num, item_type, ans_num, trivia_folder)
-
-def handle_post_edit_menu(dtmf, q_num, questions_list, trivia_folder):
-    if dtmf == '1':
-        return build_select_item_prompt(q_num, questions_list, trivia_folder)
-    elif dtmf == '2':
-        return handle_select_question('', questions_list, trivia_folder)
+        return handle_select_question('', trivia_data, trivia_folder)
     elif dtmf == '3' or dtmf == '*':
         return "id_list_message=t-תודה רבה היציאה בוצעה בהצלחה.&hangup=yes"
 
-    return build_post_edit_prompt(q_num, trivia_folder)
+    return build_post_edit_prompt(q_idx, trivia_folder)
 
 @app.route('/api/trivia', methods=['GET', 'POST'])
 def trivia_endpoint():
@@ -265,35 +282,31 @@ def trivia_endpoint():
 
         step = params.get('step', 'init')
         try:
-            q_num = int(params.get('q_num', 0))
+            q_idx = int(params.get('q_idx', 0))
         except ValueError:
-            q_num = 0
+            q_idx = 0
 
-        item_type = params.get('item_type', '')
-        try:
-            ans_num = int(params.get('ans_num', 0))
-        except ValueError:
-            ans_num = 0
-
+        letter = params.get('letter', '')
+        file_path = params.get('file_path', '')
         trivia_folder = params.get('trivia_folder', '1')
 
         dtmf = extract_dtmf(params)
 
-        # סריקה דינמית בזמן אמת של שלוחת הטריוויה בשרת ימות המשיח
-        questions_list = scan_trivia_folder_dynamic(trivia_folder)
+        # סריקת מבנה הטריוויה הפיזי בשרת ימות המשיח
+        trivia_data = scan_trivia_structure(trivia_folder)
 
         response_text = ""
 
         if step in ['init', 'select_question']:
-            response_text = handle_select_question(dtmf, questions_list, trivia_folder)
+            response_text = handle_select_question(dtmf, trivia_data, trivia_folder)
         elif step == 'select_item':
-            response_text = handle_select_item(dtmf, q_num, questions_list, trivia_folder)
+            response_text = handle_select_item(dtmf, q_idx, trivia_data, trivia_folder)
         elif step == 'action_menu':
-            response_text = handle_action_menu(dtmf, q_num, item_type, ans_num, questions_list, trivia_folder)
+            response_text = handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folder)
         elif step == 'post_edit_menu':
-            response_text = handle_post_edit_menu(dtmf, q_num, questions_list, trivia_folder)
+            response_text = handle_post_edit_menu(dtmf, q_idx, trivia_data, trivia_folder)
         else:
-            response_text = handle_select_question('', questions_list, trivia_folder)
+            response_text = handle_select_question('', trivia_data, trivia_folder)
 
         return send_yemot_response(response_text)
 
