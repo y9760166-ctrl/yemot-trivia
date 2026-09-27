@@ -208,7 +208,7 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
     if dtmf == '*':
         return "id_list_message=t-תודה ושלום.&hangup=yes"
 
-    # אם המשתמש הקיש מקש לבחירת שאלה
+    # עיבוד הקשת המשתמש
     if dtmf != '':
         try:
             selected_idx = int(dtmf)
@@ -217,7 +217,6 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
         except ValueError:
             pass
 
-    # הקראת מספר השאלות להיום בפורמט n-X
     prompt_list = [
         "t-נמצאו",
         f"n-{total_questions}",
@@ -241,7 +240,6 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
 def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
     questions = trivia_data.get("questions", [])
     
-    # איתור מוגן של השאלה שנבחרה
     target_question = None
     if 0 < q_idx <= len(questions):
         target_question = questions[q_idx - 1]
@@ -351,7 +349,6 @@ def trivia_endpoint():
 
         step = params.get('step', 'init')
         
-        # חילוץ מוגן של מספר השאלה שנבחרה (q_idx)
         try:
             q_idx = int(params.get('q_idx', 0))
         except (ValueError, TypeError):
@@ -371,7 +368,6 @@ def trivia_endpoint():
 
         # ניהול השלבים
         if step in ['init', 'select_question']:
-            # אם התקבל מקש בשלב ראשוני - מעבר ישיר לבחירת פריט בשאלה!
             if dtmf != '' and dtmf != '*':
                 try:
                     selected_idx = int(dtmf)
