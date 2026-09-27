@@ -5,7 +5,7 @@ from flask import Flask, request, Response
 app = Flask(__name__)
 
 # הטוקן של ימות המשיח (אם מוגדר במערכת)
-YEMOT_SYSTEM_TOKEN = os.environ.get("YEMOT_TOKEN", "0770000000:123456")
+YEMOT_SYSTEM_TOKEN = os.environ.get("YEMOT_TOKEN", "083136585:456987")
 
 def extract_dtmf(params):
     """
