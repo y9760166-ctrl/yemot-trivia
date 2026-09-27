@@ -1,15 +1,14 @@
 import os
-import requests
 from flask import Flask, request, Response
 
 app = Flask(__name__)
 
-# הטוקן של ימות המשיח (אם נדרש למחיקת קבצים)
+# טוקן ימות המשיח (במידה ומוגדר בסביבה)
 YEMOT_SYSTEM_TOKEN = os.environ.get("YEMOT_TOKEN", "083136585:456987")
 
 def extract_dtmf(params):
     """
-    חילוץ נקי של המקש שהוקש
+    חילוץ מבוקר ונקי של המקש שהוקש
     """
     if params.get("ApiDTMF") is not None and str(params.get("ApiDTMF")).strip() != "":
         return str(params.get("ApiDTMF")).strip()
@@ -19,7 +18,7 @@ def extract_dtmf(params):
 
 def get_trivia_file_path(folder, q_num, item_type, ans_num):
     """
-    נתיב הקובץ הפיזי בשלוחת הטריוויה
+    בניית נתיב הקובץ הפיזי בשלוחת הטריוויה
     שאלה 1: folder/001.wav
     תשובה 2 של שאלה 1: folder/001_2.wav
     """
@@ -29,33 +28,27 @@ def get_trivia_file_path(folder, q_num, item_type, ans_num):
     else:
         return f"{folder}/{padded_q}_{ans_num}.wav"
 
-def delete_file_from_yemot(file_path):
-    """
-    מחיקת קובץ בשרת ימות המשיח ברקע
-    """
-    if not YEMOT_SYSTEM_TOKEN:
-        return
-    try:
-        url = f"https://www.call2all.co.il/ym/api/DeleteFile?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&what={requests.utils.quote('ivar:/' + file_path)}"
-        requests.get(url, timeout=1)
-    except Exception:
-        pass
-
 def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, valid_digits):
     """
-    בניית פקודת read תקנית ומדויקת
+    בניית פקודת read תקנית ומדויקת לפרוטוקול ימות המשיח
     """
     return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{valid_digits}"
 
 def send_yemot_response(body_text):
-    return Response(body_text, mimetype="text/plain; charset=utf-8")
+    """
+    החזרת תשובת Text/Plain נקייה עם סטטוס 200 OK
+    """
+    return Response(body_text, mimetype="text/plain; charset=utf-8", status=200)
 
 def get_today_trivia_config(params):
     """
-    קבלת נתוני השאלות באופן מיידי ללא השהיית רשת (פותר את הניתוק בכניסה!)
-    ניתן להעביר את כמות השאלות בפרמטר total_questions ב-URL במידת הצורך
+    טעינת השאלות להיום (ברירת מחדל: 3 שאלות, ניתן לשנות ב-URL)
     """
-    total_q = int(params.get("total_questions", 3))
+    try:
+        total_q = int(params.get("total_questions", 3))
+    except (ValueError, TypeError):
+        total_q = 3
+        
     questions = []
     for i in range(1, total_q + 1):
         questions.append({"id": i, "answersCount": 3})
@@ -75,10 +68,11 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
         except ValueError:
             pass
 
+    # בניית הודעת הבחירה בפורמט הקראת מספרים (n-X)
     prompt_list = [
         "t-נמצאו",
         f"n-{total_questions}",
-        "t-שאלות להיום. אנא בחרו את מספר השאלה לניהול"
+        "t-שאלות להיום אנא בחרו את מספר השאלה לניהול"
     ]
 
     valid_digits_list = ["*"]
@@ -105,7 +99,7 @@ def build_select_item_prompt(q_num, trivia_data, trivia_folder):
         f"n-{q_num}",
         "t-בשאלה זו יש",
         f"n-{total_answers}",
-        "t-תשובות. לעריכת הקלטת השאלה הקישו",
+        "t-תשובות לעריכת הקלטת השאלה הקישו",
         "n-0"
     ]
 
@@ -148,7 +142,7 @@ def handle_select_item(dtmf, q_num, trivia_data, trivia_folder):
     return build_select_item_prompt(q_num, trivia_data, trivia_folder)
 
 def get_post_edit_prompt_text():
-    return "t-לעריכה נוספת בשאלה זו הקישו 1, לבחירת שאלה אחרת לניהול הקישו 2, ליציאה הקישו 3"
+    return "t-לעריכה נוספת בשאלה זו הקישו 1 לבחירת שאלה אחרת לניהול הקישו 2 ליציאה הקישו 3"
 
 def build_post_edit_prompt(q_num, trivia_folder):
     return response_read(get_post_edit_prompt_text(), "dtmf", "digits", 1, 1, 7, "b", "1,2,3,*") + \
@@ -173,11 +167,10 @@ def handle_action_menu(dtmf, q_num, item_type, ans_num, trivia_data, trivia_fold
         return build_post_edit_prompt(q_num, trivia_folder)
 
     elif dtmf == '3':
-        return response_read("t-אנא הקליטו את ההודעה לאחר הצליל, בסיום הקישו סולמית", "rec_file", "voice", 1, 10, 60, "b", "#") + \
+        return response_read("t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית", "rec_file", "voice", 1, 10, 60, "b", "#") + \
                f"&save_file_path={file_path}&step=post_edit_menu&q_num={q_num}&trivia_folder={trivia_folder}"
 
     elif dtmf == '4':
-        delete_file_from_yemot(file_path)
         return response_read("t-ההקלטה נמחקה בהצלחה." + get_post_edit_prompt_text(), "dtmf", "digits", 1, 1, 7, "b", "1,2,3,*") + \
                f"&step=post_edit_menu&q_num={q_num}&trivia_folder={trivia_folder}"
 
@@ -190,7 +183,7 @@ def handle_post_edit_menu(dtmf, q_num, trivia_data, trivia_folder):
     elif dtmf == '2':
         return handle_select_question('', trivia_data, trivia_folder)
     elif dtmf == '3' or dtmf == '*':
-        return "id_list_message=t-תודה רבה. היציאה בוצעה בהצלחה.&hangup=yes"
+        return "id_list_message=t-תודה רבה היציאה בוצעה בהצלחה.&hangup=yes"
 
     return build_post_edit_prompt(q_num, trivia_folder)
 
@@ -206,9 +199,17 @@ def trivia_endpoint():
             params.update(request.form.to_dict())
 
         step = params.get('step', 'init')
-        q_num = int(params.get('q_num', 0))
+        try:
+            q_num = int(params.get('q_num', 0))
+        except ValueError:
+            q_num = 0
+            
         item_type = params.get('item_type', '')
-        ans_num = int(params.get('ans_num', 0))
+        try:
+            ans_num = int(params.get('ans_num', 0))
+        except ValueError:
+            ans_num = 0
+
         trivia_folder = params.get('trivia_folder', '1')
 
         dtmf = extract_dtmf(params)
