@@ -4,12 +4,12 @@ from flask import Flask, request, Response
 
 app = Flask(__name__)
 
-# הטוקן של ימות המשיח (הגדירו ב-Environment Variables במידת הצורך)
+# הטוקן של ימות המשיח (אם נדרש למחיקת קבצים)
 YEMOT_SYSTEM_TOKEN = os.environ.get("YEMOT_TOKEN", "083136585:456987")
 
 def extract_dtmf(params):
     """
-    חילוץ נקי של המקש שהוקש מכל הפרמטרים האפשריים
+    חילוץ נקי של המקש שהוקש
     """
     if params.get("ApiDTMF") is not None and str(params.get("ApiDTMF")).strip() != "":
         return str(params.get("ApiDTMF")).strip()
@@ -31,67 +31,34 @@ def get_trivia_file_path(folder, q_num, item_type, ans_num):
 
 def delete_file_from_yemot(file_path):
     """
-    מחיקת קובץ משרתי ימות המשיח
+    מחיקת קובץ בשרת ימות המשיח ברקע
     """
     if not YEMOT_SYSTEM_TOKEN:
         return
     try:
         url = f"https://www.call2all.co.il/ym/api/DeleteFile?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&what={requests.utils.quote('ivar:/' + file_path)}"
-        requests.get(url, timeout=2)
+        requests.get(url, timeout=1)
     except Exception:
         pass
 
 def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, valid_digits):
     """
-    בניית פקודת read תקינה בלבד (ללא id_list_message שגרם לניתוק!)
+    בניית פקודת read תקנית ומדויקת
     """
     return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{valid_digits}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8")
 
-def get_trivia_data_from_yemot(trivia_folder):
+def get_today_trivia_config(params):
     """
-    סריקה דינמית של השלוחה בשרת ימות המשיח לקבלת כמות השאלות המדויקת
+    קבלת נתוני השאלות באופן מיידי ללא השהיית רשת (פותר את הניתוק בכניסה!)
+    ניתן להעביר את כמות השאלות בפרמטר total_questions ב-URL במידת הצורך
     """
+    total_q = int(params.get("total_questions", 3))
     questions = []
-
-    # אם מוגדר טוקן תקין - סריקת הקבצים בשלוחה דרך ה-API
-    if YEMOT_SYSTEM_TOKEN:
-        try:
-            url = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + str(trivia_folder))}"
-            res = requests.get(url, timeout=2.5).json()
-
-            if res.get("responseStatus") == "OK" and "files" in res:
-                files = res.get("files", [])
-                q_dict = {}
-
-                for f in files:
-                    name = f.get("name", "")
-                    if name.endswith(".wav"):
-                        base_name = name[:-4]
-                        if base_name.isdigit() and len(base_name) == 3:
-                            q_id = int(base_name)
-                            if q_id not in q_dict:
-                                q_dict[q_id] = 0
-                        elif "_" in base_name:
-                            parts = base_name.split("_")
-                            if len(parts) == 2 and parts[0].isdigit() and len(parts[0]) == 3 and parts[1].isdigit():
-                                q_id = int(parts[0])
-                                ans_id = int(parts[1])
-                                q_dict[q_id] = max(q_dict.get(q_id, 0), ans_id)
-
-                sorted_q_ids = sorted(q_dict.keys())
-                for q_id in sorted_q_ids:
-                    ans_count = q_dict[q_id] if q_dict[q_id] > 0 else 3
-                    questions.append({"id": q_id, "answersCount": ans_count})
-        except Exception as e:
-            print(f"API Scan Error: {e}")
-
-    # אם אין טוקן או שהשלוחה ריקה - ברירת מחדל של שאלה אחת
-    if not questions:
-        questions = [{"id": 1, "answersCount": 3}]
-
+    for i in range(1, total_q + 1):
+        questions.append({"id": i, "answersCount": 3})
     return {"questions": questions}
 
 def handle_select_question(dtmf, trivia_data, trivia_folder):
@@ -245,10 +212,7 @@ def trivia_endpoint():
         trivia_folder = params.get('trivia_folder', '1')
 
         dtmf = extract_dtmf(params)
-        trivia_data = get_trivia_data_from_yemot(trivia_folder)
-
-        if not trivia_data or not trivia_data.get('questions'):
-            return send_yemot_response("id_list_message=t-לא נמצאו הקלטות טריוויה עבור היום. להתראות.&hangup=yes")
+        trivia_data = get_today_trivia_config(params)
 
         response_text = ""
 
@@ -266,7 +230,7 @@ def trivia_endpoint():
         return send_yemot_response(response_text)
 
     except Exception as error:
-        print(f"Error in Trivia API: {error}")
+        print(f"Error in Trivia API Endpoint: {error}")
         return send_yemot_response("id_list_message=t-אירעה שגיאה במערכת הניהול.&hangup=yes")
 
 if __name__ == '__main__':
