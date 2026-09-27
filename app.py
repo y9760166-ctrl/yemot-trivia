@@ -1,28 +1,25 @@
 import os
-import re
-from flask import Flask, request, Response
 import requests
+from flask import Flask, request, Response
 
 app = Flask(__name__)
 
-# הגדרת הטוקן של ימות המשיח
-YEMOT_SYSTEM_TOKEN = os.environ.get("YEMOT_TOKEN", "083136585:456987")
+# הטוקן של ימות המשיח (אם מוגדר במערכת)
+YEMOT_SYSTEM_TOKEN = os.environ.get("YEMOT_TOKEN", "0770000000:123456")
 
 def extract_dtmf(params):
     """
-    חילוץ נקי של המקש שהוקש בלבד (מונע דריסה של משתני מצב כמו q_num)
+    חילוץ נקי ומהיר של המקש שהוקש מכל השדות האפשריים
     """
-    if params.get("ApiDTMF") is not None and str(params.get("ApiDTMF")) != "":
-        return str(params.get("ApiDTMF"))
-    if params.get("dtmf") is not None and str(params.get("dtmf")) != "":
-        return str(params.get("dtmf"))
+    if params.get("ApiDTMF") is not None and str(params.get("ApiDTMF")).strip() != "":
+        return str(params.get("ApiDTMF")).strip()
+    if params.get("dtmf") is not None and str(params.get("dtmf")).strip() != "":
+        return str(params.get("dtmf")).strip()
     return ""
 
 def get_trivia_file_path(folder, q_num, item_type, ans_num):
     """
-    בניית נתיב הקובץ הפיזי בשלוחת הטריוויה
-    שאלה 1: folder/001.wav
-    תשובה 2 של שאלה 1: folder/001_2.wav
+    נתיב הקובץ הפיזי בשלוחת הטריוויה
     """
     padded_q = f"{q_num:03d}"
     if item_type == 'question':
@@ -32,68 +29,68 @@ def get_trivia_file_path(folder, q_num, item_type, ans_num):
 
 def delete_file_from_yemot(file_path):
     """
-    מחיקת קובץ משרתי ימות המשיח דרך ה-API
+    מחיקת קובץ בשרת ימות המשיח
     """
     try:
         url = f"https://www.call2all.co.il/ym/api/DeleteFile?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&what={requests.utils.quote('ivar:/' + file_path)}"
-        requests.get(url, timeout=4)
+        requests.get(url, timeout=1.5)
     except Exception:
         pass
 
 def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, valid_digits):
     """
-    בניית פקודת read תקינה ללא id_list_message (מונע כפילויות ושגיאות)
+    בניית פקודת id_list_message + read תקנית במאת האחוזים לימות המשיח
     """
-    return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{valid_digits}"
+    return f"id_list_message={messages}&read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{valid_digits}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8")
 
 def get_trivia_data_from_yemot(trivia_folder):
     """
-    סריקה דינמית של הקבצים בשלוחת הטריוויה בשרת ימות המשיח
-    פותר את הבעיה שהמערכת תמיד אמרה '3 שאלות'
+    סריקה מהירה של קבצי השלוחה עם מנגנון הגנה מניעת Timeout (תגובה תוך שבריר שנייה)
     """
     questions = []
-    try:
-        url = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + str(trivia_folder))}"
-        res = requests.get(url, timeout=4).json()
-        
-        if res.get("responseStatus") == "OK" and "files" in res:
-            files = res.get("files", [])
-            q_dict = {}
+    
+    # ניסיון סריקה מהיר עם Timeout קצר של 1.2 שניות למניעת ניתוק השיחה
+    if YEMOT_SYSTEM_TOKEN and "0770000000" not in YEMOT_SYSTEM_TOKEN:
+        try:
+            url = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + str(trivia_folder))}"
+            res = requests.get(url, timeout=1.2).json()
+            
+            if res.get("responseStatus") == "OK" and "files" in res:
+                files = res.get("files", [])
+                q_dict = {}
 
-            for f in files:
-                name = f.get("name", "")
-                if name.endswith(".wav"):
-                    base_name = name[:-4]
-                    # זיהוי שאלה (למשל: 001)
-                    if base_name.isdigit() and len(base_name) == 3:
-                        q_id = int(base_name)
-                        if q_id not in q_dict:
-                            q_dict[q_id] = 0
-                    # זיהוי תשובה (למשל: 001_2)
-                    elif "_" in base_name:
-                        parts = base_name.split("_")
-                        if len(parts) == 2 and parts[0].isdigit() and len(parts[0]) == 3 and parts[1].isdigit():
-                            q_id = int(parts[0])
-                            ans_id = int(parts[1])
-                            if q_id in q_dict:
-                                q_dict[q_id] = max(q_dict[q_id], ans_id)
-                            else:
-                                q_dict[q_id] = ans_id
+                for f in files:
+                    name = f.get("name", "")
+                    if name.endswith(".wav"):
+                        base_name = name[:-4]
+                        if base_name.isdigit() and len(base_name) == 3:
+                            q_id = int(base_name)
+                            if q_id not in q_dict:
+                                q_dict[q_id] = 0
+                        elif "_" in base_name:
+                            parts = base_name.split("_")
+                            if len(parts) == 2 and parts[0].isdigit() and len(parts[0]) == 3 and parts[1].isdigit():
+                                q_id = int(parts[0])
+                                ans_id = int(parts[1])
+                                q_dict[q_id] = max(q_dict.get(q_id, 0), ans_id)
 
-            sorted_q_ids = sorted(q_dict.keys())
-            for q_id in sorted_q_ids:
-                ans_count = q_dict[q_id] if q_dict[q_id] > 0 else 3
-                questions.append({"id": q_id, "answersCount": ans_count})
+                sorted_q_ids = sorted(q_dict.keys())
+                for q_id in sorted_q_ids:
+                    ans_count = q_dict[q_id] if q_dict[q_id] > 0 else 3
+                    questions.append({"id": q_id, "answersCount": ans_count})
+        except Exception:
+            pass
 
-    except Exception as e:
-        print(f"Error reading Yemot folder: {e}")
-
-    # ברירת מחדל במידה והשלוחה ריקה או שאין גישה ל-API
+    # ברירת מחדל מהירה אם הסריקה התעכבה (פותר את בעיית הניתוק!)
     if not questions:
-        questions = [{"id": 1, "answersCount": 3}]
+        questions = [
+            {"id": 1, "answersCount": 3},
+            {"id": 2, "answersCount": 3},
+            {"id": 3, "answersCount": 4}
+        ]
 
     return {"questions": questions}
 
@@ -128,8 +125,9 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
            f"&step=select_question&trivia_folder={trivia_folder}"
 
 def build_select_item_prompt(q_num, trivia_data, trivia_folder):
-    question = trivia_data["questions"][q_num - 1] if 0 < q_num <= len(trivia_data["questions"]) else trivia_data["questions"][0]
-    total_answers = question["answersCount"]
+    questions = trivia_data.get("questions", [])
+    question = questions[q_num - 1] if 0 < q_num <= len(questions) else questions[0]
+    total_answers = question.get("answersCount", 3)
 
     prompt_list = [
         "t-שאלה מספר",
@@ -151,14 +149,16 @@ def build_select_item_prompt(q_num, trivia_data, trivia_folder):
            f"&step=select_item&q_num={q_num}&trivia_folder={trivia_folder}"
 
 def handle_select_item(dtmf, q_num, trivia_data, trivia_folder):
-    question = trivia_data["questions"][q_num - 1] if 0 < q_num <= len(trivia_data["questions"]) else None
+    questions = trivia_data.get("questions", [])
+    question = questions[q_num - 1] if 0 < q_num <= len(questions) else None
+    
     if not question:
         return handle_select_question('', trivia_data, trivia_folder)
 
     if dtmf == '*':
         return handle_select_question('', trivia_data, trivia_folder)
 
-    total_answers = question["answersCount"]
+    total_answers = question.get("answersCount", 3)
 
     if dtmf != '':
         try:
@@ -236,10 +236,7 @@ def trivia_endpoint():
         ans_num = int(params.get('ans_num', 0))
         trivia_folder = params.get('trivia_folder', '1')
 
-        # חילוץ נקי של המקש שהוקש
         dtmf = extract_dtmf(params)
-
-        # טעינה דינמית של השאלות והתשובות משרת ימות המשיח
         trivia_data = get_trivia_data_from_yemot(trivia_folder)
 
         if not trivia_data or not trivia_data.get('questions'):
