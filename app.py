@@ -45,7 +45,7 @@ def get_today_hebrew_date_string():
 
 def extract_token(params):
     """
-    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת מקובץ ה-ext.ini
+    חילוץ אוטומטי של הטוקן מתוך הבקשה הנכנסת מקובץ ה-ext.ini!
     """
     if params.get("token"):
         return str(params.get("token")).strip()
@@ -78,15 +78,15 @@ def delete_file_from_yemot(token, file_path):
 
 def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, valid_digits):
     """
-    בניית פקודת read תקנית
+    בניית פקודת read תקנית ומדויקת לימות המשיח
     """
     clean_digits = str(valid_digits).replace(",", "")
     return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{clean_digits}"
 
 def build_record_goto_prompt(file_path, q_idx, trivia_folder):
     """
-    חישוב דינמי ומדויק לחלוטין של תת-שלוחת ההקלטה rec תחת השלוחה הנוכחית!
-    דוגמה: אם trivia_folder הוא 1/2, הניתוב יעבור ל- /1/2/rec
+    פקודת goto נקייה ותקנית ב-100% המעבירה מידית לתת-שלוחת ההקלטה (rec)
+    תת-השלוחה מקליטה, דורסת פיזית את הקובץ בשלוחת הטריוויה, ומחזירה לשלוחת ה-API!
     """
     clean_file_path = str(file_path).replace("ivar:/", "").strip('/')
     clean_trivia_folder = str(trivia_folder).replace("ivar:/", "").strip('/')
@@ -94,7 +94,7 @@ def build_record_goto_prompt(file_path, q_idx, trivia_folder):
     rec_ext_path = f"/{clean_trivia_folder}/rec"
     return_api_path = f"/{clean_trivia_folder}"
 
-    return f"go_to_folder={rec_ext_path}&record_file_path=ivar:/{clean_file_path}&end_goto={return_api_path}?step=post_edit_menu&q_idx={q_idx}&trivia_folder={clean_trivia_folder}"
+    return f"goto={rec_ext_path}&record_file_path=ivar:/{clean_file_path}&end_goto={return_api_path}?step=post_edit_menu&q_idx={q_idx}&trivia_folder={clean_trivia_folder}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8", status=200)
@@ -167,7 +167,7 @@ def scan_today_trivia_structure(trivia_folder, token):
 
         question_folders.sort()
 
-        # סריקת הקבצים בתוך כל תיקיית שאלה
+        # סריקת הקבצים
         for idx, q_folder_name in enumerate(question_folders, start=1):
             q_full_path = f"{date_folder_path}/{q_folder_name}"
             url_q = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(token)}&path={requests.utils.quote('ivar:/' + q_full_path)}"
@@ -365,7 +365,7 @@ def trivia_endpoint():
                 else:
                     target_file_path = f"{clean_trivia_folder}/{date_folder}/{q_folder_name}/{letter}.wav"
                     
-                # מעבר ישיר ומובטח לתת-שלוחת ההקלטה rec תחת השלוחה הנוכחית!
+                # העברה ישירה ונקייה ב-100% לתת-שלוחת ההקלטה rec!
                 response_text = build_record_goto_prompt(target_file_path, q_idx, trivia_folder)
             else:
                 response_text = build_select_item_prompt(q_idx, trivia_data, trivia_folder)
