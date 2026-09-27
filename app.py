@@ -4,12 +4,12 @@ from flask import Flask, request, Response
 
 app = Flask(__name__)
 
-# הטוקן של ימות המשיח (אם מוגדר במערכת)
+# הטוקן של ימות המשיח (הגדירו ב-Environment Variables במידת הצורך)
 YEMOT_SYSTEM_TOKEN = os.environ.get("YEMOT_TOKEN", "083136585:456987")
 
 def extract_dtmf(params):
     """
-    חילוץ נקי ומהיר של המקש שהוקש מכל השדות האפשריים
+    חילוץ נקי של המקש שהוקש מכל הפרמטרים האפשריים
     """
     if params.get("ApiDTMF") is not None and str(params.get("ApiDTMF")).strip() != "":
         return str(params.get("ApiDTMF")).strip()
@@ -20,6 +20,8 @@ def extract_dtmf(params):
 def get_trivia_file_path(folder, q_num, item_type, ans_num):
     """
     נתיב הקובץ הפיזי בשלוחת הטריוויה
+    שאלה 1: folder/001.wav
+    תשובה 2 של שאלה 1: folder/001_2.wav
     """
     padded_q = f"{q_num:03d}"
     if item_type == 'question':
@@ -29,35 +31,37 @@ def get_trivia_file_path(folder, q_num, item_type, ans_num):
 
 def delete_file_from_yemot(file_path):
     """
-    מחיקת קובץ בשרת ימות המשיח
+    מחיקת קובץ משרתי ימות המשיח
     """
+    if not YEMOT_SYSTEM_TOKEN:
+        return
     try:
         url = f"https://www.call2all.co.il/ym/api/DeleteFile?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&what={requests.utils.quote('ivar:/' + file_path)}"
-        requests.get(url, timeout=1.5)
+        requests.get(url, timeout=2)
     except Exception:
         pass
 
 def response_read(messages, val_name, type_val, min_val, max_val, timeout, tap, valid_digits):
     """
-    בניית פקודת id_list_message + read תקנית במאת האחוזים לימות המשיח
+    בניית פקודת read תקינה בלבד (ללא id_list_message שגרם לניתוק!)
     """
-    return f"id_list_message={messages}&read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{valid_digits}"
+    return f"read={messages}={val_name},{type_val},{min_val},{max_val},{timeout},{tap},no,{valid_digits}"
 
 def send_yemot_response(body_text):
     return Response(body_text, mimetype="text/plain; charset=utf-8")
 
 def get_trivia_data_from_yemot(trivia_folder):
     """
-    סריקה מהירה של קבצי השלוחה עם מנגנון הגנה מניעת Timeout (תגובה תוך שבריר שנייה)
+    סריקה דינמית של השלוחה בשרת ימות המשיח לקבלת כמות השאלות המדויקת
     """
     questions = []
-    
-    # ניסיון סריקה מהיר עם Timeout קצר של 1.2 שניות למניעת ניתוק השיחה
-    if YEMOT_SYSTEM_TOKEN and "0770000000" not in YEMOT_SYSTEM_TOKEN:
+
+    # אם מוגדר טוקן תקין - סריקת הקבצים בשלוחה דרך ה-API
+    if YEMOT_SYSTEM_TOKEN:
         try:
             url = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + str(trivia_folder))}"
-            res = requests.get(url, timeout=1.2).json()
-            
+            res = requests.get(url, timeout=2.5).json()
+
             if res.get("responseStatus") == "OK" and "files" in res:
                 files = res.get("files", [])
                 q_dict = {}
@@ -81,16 +85,12 @@ def get_trivia_data_from_yemot(trivia_folder):
                 for q_id in sorted_q_ids:
                     ans_count = q_dict[q_id] if q_dict[q_id] > 0 else 3
                     questions.append({"id": q_id, "answersCount": ans_count})
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"API Scan Error: {e}")
 
-    # ברירת מחדל מהירה אם הסריקה התעכבה (פותר את בעיית הניתוק!)
+    # אם אין טוקן או שהשלוחה ריקה - ברירת מחדל של שאלה אחת
     if not questions:
-        questions = [
-            {"id": 1, "answersCount": 3},
-            {"id": 2, "answersCount": 3},
-            {"id": 3, "answersCount": 4}
-        ]
+        questions = [{"id": 1, "answersCount": 3}]
 
     return {"questions": questions}
 
@@ -114,14 +114,18 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
         "t-שאלות להיום. אנא בחרו את מספר השאלה לניהול"
     ]
 
+    valid_digits_list = ["*"]
     for i in range(1, total_questions + 1):
         prompt_list.append("t-לשאלה")
         prompt_list.append(f"n-{i}")
         prompt_list.append("t-הקישו")
         prompt_list.append(f"n-{i}")
+        valid_digits_list.append(str(i))
 
     prompt_str = ".".join(prompt_list)
-    return response_read(prompt_str, "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,5,6,7,8,9,*") + \
+    valid_digits_str = ",".join(valid_digits_list)
+
+    return response_read(prompt_str, "dtmf", "digits", 1, 1, 7, "b", valid_digits_str) + \
            f"&step=select_question&trivia_folder={trivia_folder}"
 
 def build_select_item_prompt(q_num, trivia_data, trivia_folder):
@@ -138,20 +142,24 @@ def build_select_item_prompt(q_num, trivia_data, trivia_folder):
         "n-0"
     ]
 
+    valid_digits_list = ["0", "*"]
     for i in range(1, total_answers + 1):
         prompt_list.append("t-לעריכת תשובה")
         prompt_list.append(f"n-{i}")
         prompt_list.append("t-הקישו")
         prompt_list.append(f"n-{i}")
+        valid_digits_list.append(str(i))
 
     prompt_str = ".".join(prompt_list)
-    return response_read(prompt_str, "dtmf", "digits", 1, 1, 7, "b", "0,1,2,3,4,5,6,7,8,9,*") + \
+    valid_digits_str = ",".join(valid_digits_list)
+
+    return response_read(prompt_str, "dtmf", "digits", 1, 1, 7, "b", valid_digits_str) + \
            f"&step=select_item&q_num={q_num}&trivia_folder={trivia_folder}"
 
 def handle_select_item(dtmf, q_num, trivia_data, trivia_folder):
     questions = trivia_data.get("questions", [])
     question = questions[q_num - 1] if 0 < q_num <= len(questions) else None
-    
+
     if not question:
         return handle_select_question('', trivia_data, trivia_folder)
 
