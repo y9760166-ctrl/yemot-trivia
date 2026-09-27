@@ -29,38 +29,25 @@ ITEM_KEYS = {
 
 def get_today_hebrew_date_string():
     """
-    מנוע חישוב תאריך עברי בפורמט 8 ספרות ברצף (YYYYMMDD):
-    שנה עברית (4 ספרות) + חודש עברי (2 ספרות) + יום עברי (2 ספרות)
-    דוגמה: ט"ז תשרי תשפ"ז = 5787 + 01 + 16 = 57870116
+    חישוב תאריך עברי בפורמט 8 ספרות ברצף (YYYYMMDD):
+    דוגמה: ט"ז תשרי תשפ"ד = 57840116
     """
     try:
         from pyluach import dates
         today_hebrew = dates.HebrewDate.today()
-        year = today_hebrew.year # 5787
-        month = today_hebrew.month # 1 (תשרי)
-        day = today_hebrew.day # 16
-
+        year = today_hebrew.year
+        month = today_hebrew.month
+        day = today_hebrew.day
         return f"{year:04d}{month:02d}{day:02d}"
-    except ImportError:
-        # אלגוריתם המרה עברי פנימי למקרה שספריית pyluach אינה מותקנת
-        return calculate_hebrew_date_fallback()
-
-def calculate_hebrew_date_fallback():
-    """
-    אלגוריתם המרת תאריך עברי בסיסי
-    """
-    now = datetime.now()
-    # חישוב מוערך של השנה העברית (2024 -> 5784)
-    hebrew_year = now.year + 3760
-    if now.month >= 9:
-        hebrew_year += 1
-
-    # מיפוי חודשים מוערך
-    month_map = {9: 1, 10: 2, 11: 3, 12: 4, 1: 5, 2: 6, 3: 7, 4: 8, 5: 9, 6: 10, 7: 11, 8: 12}
-    hebrew_month = month_map.get(now.month, 1)
-    hebrew_day = min(now.day, 29)
-
-    return f"{hebrew_year:04d}{hebrew_month:02d}{hebrew_day:02d}"
+    except Exception:
+        now = datetime.now()
+        hebrew_year = now.year + 3760
+        if now.month >= 9:
+            hebrew_year += 1
+        month_map = {9: 1, 10: 2, 11: 3, 12: 4, 1: 5, 2: 6, 3: 7, 4: 8, 5: 9, 6: 10, 7: 11, 8: 12}
+        hebrew_month = month_map.get(now.month, 1)
+        hebrew_day = min(now.day, 30)
+        return f"{hebrew_year:04d}{hebrew_month:02d}{hebrew_day:02d}"
 
 def extract_dtmf(params):
     """
@@ -95,16 +82,17 @@ def send_yemot_response(body_text):
 
 def scan_today_trivia_structure(trivia_folder):
     """
-    סריקת מבנה הטריוויה היומי לפי תאריך עברי 8 ספרות:
-    1. חישוב/איתור תיקיית התאריך העברי של היום (לדוגמה: 57870116).
-    2. איתור תיקיות השאלות הממוספרות (000, 001, 002...).
-    3. זיהוי הקבצים הפיזיים (Q.wav, A.wav, B.wav...) בתוך כל תיקיית שאלה.
+    סנכרון מלא בזמן אמת מול התיקיות הקיימות בשלוחה:
+    1. סורק את כל התיקיות בעלות 8 ספרות (YYYYMMDD) בשלוחה.
+    2. מוצא את התיקייה התואמת לתאריך של היום, או את התיקייה הקישורית הציבורית העדכנית ביותר.
+    3. מוצא את כל תיקיות השאלות הממוספרות (000, 001, 002...).
+    4. סורק את קבצי השיוך (Q.wav, A.wav, B.wav...).
     """
-    today_date_str = get_today_hebrew_date_string()
+    calculated_today_str = get_today_hebrew_date_string()
     
     trivia_data = {
-        "date_folder": today_date_str,
-        "date_folder_path": f"{trivia_folder}/{today_date_str}",
+        "date_folder": calculated_today_str,
+        "date_folder_path": f"{trivia_folder}/{calculated_today_str}",
         "questions": []
     }
 
@@ -112,27 +100,34 @@ def scan_today_trivia_structure(trivia_folder):
         return trivia_data
 
     try:
-        # 1. בדיקת קיום תיקיית התאריך העברי בשלוחה
+        # 1. סריקת התיקיות בתוך השלוחה הראשית
         url_root = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + str(trivia_folder))}"
         res_root = requests.get(url_root, timeout=2.5).json()
 
-        date_folder_to_use = today_date_str
+        date_folder_to_use = ""
         if res_root.get("responseStatus") == "OK":
             dirs = res_root.get("dirs", []) or res_root.get("folders", [])
-            existing_dates = []
+            existing_date_folders = []
+            
             for d in dirs:
                 d_name = d.get("name", "") if isinstance(d, dict) else str(d)
+                # סינון תיקיות תאריך בעלות 8 ספרות בלבד
                 if d_name.isdigit() and len(d_name) == 8:
-                    existing_dates.append(d_name)
+                    existing_date_folders.append(d_name)
 
-            # אם התאריך של היום קיים ברשימה - נשתמש בו, אחרת נקח את התאריך העדכני ביותר
-            if today_date_str in existing_dates:
-                date_folder_to_use = today_date_str
-            elif existing_dates:
-                existing_dates.sort()
-                date_folder_to_use = existing_dates[-1]
+            # בדיקה האם קיימת התאמה מדויקת לתאריך המחושב
+            if calculated_today_str in existing_date_folders:
+                date_folder_to_use = calculated_today_str
+            elif existing_date_folders:
+                # במידה ולא נמצאה התאמה מדויקת, לוקח את התיקייה העדכנית ביותר
+                existing_date_folders.sort()
+                date_folder_to_use = existing_date_folders[-1]
+
+        if not date_folder_to_use:
+            date_folder_to_use = calculated_today_str
 
         date_folder_path = f"{trivia_folder}/{date_folder_to_use}"
+        trivia_data["date_folder"] = date_folder_to_use
         trivia_data["date_folder_path"] = date_folder_path
 
         # 2. סריקת תיקיות השאלות (000, 001, 002...) בתוך תיקיית התאריך
@@ -149,7 +144,7 @@ def scan_today_trivia_structure(trivia_folder):
 
         question_folders.sort()
 
-        # 3. סריקת הקבצים בתוך כל תיקיית שאלה (Q.wav, A.wav, B.wav...)
+        # 3. סריקת הקבצים (Q.wav, A.wav, B.wav...) בתוך כל תיקיית שאלה
         for idx, q_folder_name in enumerate(question_folders, start=1):
             q_full_path = f"{date_folder_path}/{q_folder_name}"
             url_q = f"https://www.call2all.co.il/ym/api/GetIVR2Dir?token={requests.utils.quote(YEMOT_SYSTEM_TOKEN)}&path={requests.utils.quote('ivar:/' + q_full_path)}"
@@ -161,7 +156,7 @@ def scan_today_trivia_structure(trivia_folder):
                 for f in files:
                     f_name = f.get("name", "")
                     if f_name.lower().endswith(".wav"):
-                        letter = f_name[:-4].upper()
+                        letter = f_name[:-4].upper() # Q, A, B, C, D...
                         existing_files[letter] = f"{q_full_path}/{f_name}"
 
             trivia_data["questions"].append({
@@ -194,7 +189,7 @@ def handle_select_question(dtmf, trivia_data, trivia_folder):
         except ValueError:
             pass
 
-    # הקראת מספר השאלות להיום בפורמט n-X
+    # הקראת מספר השאלות בפורמט n-X
     prompt_list = [
         "t-נמצאו",
         f"n-{total_questions}",
@@ -227,7 +222,7 @@ def build_select_item_prompt(q_idx, trivia_data, trivia_folder):
 
     valid_digits_list = ["*"]
 
-    # בניית ההכרזה לפי הקבצים הקיימים בתיקיית השאלה
+    # הקראת האפשרויות לפי הקבצים הקיימים בתיקיית השאלה הנבחרת
     for digit, letter in ITEM_KEYS.items():
         if letter in existing_files:
             prompt_list.append(f"t-{ITEM_LABELS[letter]}")
@@ -260,6 +255,9 @@ def handle_select_item(dtmf, q_idx, trivia_data, trivia_folder):
     return build_select_item_prompt(q_idx, trivia_data, trivia_folder)
 
 def build_action_menu_prompt(q_idx, letter, file_path, trivia_folder):
+    """
+    תפריט M1009 לעריכת הקובץ
+    """
     return response_read("m-1009", "dtmf", "digits", 1, 1, 7, "b", "1,2,3,4,*") + \
            f"&step=action_menu&q_idx={q_idx}&letter={letter}&file_path={requests.utils.quote(file_path)}&trivia_folder={trivia_folder}"
 
@@ -278,7 +276,7 @@ def handle_action_menu(dtmf, q_idx, letter, file_path, trivia_data, trivia_folde
         return build_post_edit_prompt(q_idx, trivia_folder)
 
     elif dtmf == '3':
-        # 3 - הקלטה מחודשת ושמירה ישירה במיקום המדויק
+        # 3 - הקלטה מחודשת ושמירה במיקום המדויק
         return response_read("t-אנא הקליטו את ההודעה לאחר הצליל בסיום הקישו סולמית", "rec_file", "voice", 1, 10, 60, "b", "#") + \
                f"&save_file_path={file_path}&step=post_edit_menu&q_idx={q_idx}&trivia_folder={trivia_folder}"
 
@@ -331,7 +329,7 @@ def trivia_endpoint():
 
         dtmf = extract_dtmf(params)
 
-        # סריקת מבנה הטריוויה היומי לפי תאריך עברי 8 ספרות
+        # סריקה וסנכרון מלא בזמן אמת מול התיקיות בשלוחה
         trivia_data = scan_today_trivia_structure(trivia_folder)
 
         response_text = ""
